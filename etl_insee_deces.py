@@ -15,18 +15,18 @@ default_args = {
 }
 
 dag = DAG(
-    dag_id="etl_insee_deces_histo",
+    dag_id="etl_insee_deces_monthly",
     default_args=default_args,
     description="Import initial du fichier historique INSEE des décès",
-    schedule_interval=None,
+    schedule_interval="0 6 10 * *",  # chaque 10 du mois à 6h00
     catchup=False,
-    tags=["insee", "deces", "historique"]
+    tags=["insee", "deces", "mensuel"]
 )
 
 download = PythonOperator(
     task_id="download_insee_file",
     python_callable=download_insee_file,
-    op_kwargs={"mode": "historical"},
+    op_kwargs={"mode": "monthly"},
     provide_context=True,
     dag=dag
 )
