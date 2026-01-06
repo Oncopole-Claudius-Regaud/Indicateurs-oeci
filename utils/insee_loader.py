@@ -134,7 +134,7 @@ def transform_insee_file():
         logging.warning("ignes avec date_deces invalide (extrait) :")
         logging.warning(bad_deces[["nom", "prenoms", "date_deces"]].head().to_string())
 
-    # ✅ Filtrage robuste
+    # Filtrage robuste
     avant = len(df)
     df = df[df["date_deces"].str.fullmatch(r"\d{8}")]
     logging.info(f"Lignes supprimées pour date_deces invalide : {avant - len(df)}")
@@ -191,7 +191,6 @@ def load_to_postgres(mode="monthly", **context):
         logging.info("Mode 'historical' détecté → TRUNCATE table avant insertion")
         cur.execute(f"TRUNCATE TABLE {TABLE_NAME}")
         conn.commit()
-
     else:
         logging.info("Mode 'monthly' → insertion incrémentale (pas de TRUNCATE)")
 
@@ -216,29 +215,45 @@ def load_to_postgres(mode="monthly", **context):
     )
     conn.commit()
 
-    if mode == "monthly":
-        # Insertion uniquement des nouveaux décès
-        cur.execute(f"""
-            INSERT INTO {TABLE_NAME}
-            SELECT * FROM tmp_insee_ref t
-            WHERE NOT EXISTS (
-                SELECT 1 FROM {TABLE_NAME} r
-                WHERE
-                    r.nom = t.nom
-                    AND r.prenoms = t.prenoms
-                    AND r.date_naissance = t.date_naissance
-                    AND r.date_deces = t.date_deces
-            )
-        """)
-        conn.commit()
-    else:
-        # Mode historique → insérer tout (déjà tronqué)
-        cur.execute(f"""
-            INSERT INTO {TABLE_NAME}
-            SELECT * FROM tmp_insee_ref
-        """)
-        conn.commit()
+    # Contrôle de doublons AVANT insertion
+    # Compter les doublons potentiels
+    cur.execute(f"""
+        SELECT COUNT(*) FROM tmp_insee_ref t
+        WHERE EXISTS (
+            SELECT 1 FROM {TABLE_NAME} r
+            WHERE
+                r.nom = t.nom
+                AND r.prenoms = t.prenoms
+                AND r.sexe = t.sexe
+                AND r.date_naissance = t.date_naissance
+                AND r.code_insee_lieu_naissance = t.code_insee_lieu_naissance
+                AND r.commune_naissance = t.commune_naissance
+                AND r.date_deces = t.date_deces
+        )
+    """)
+    nb_doublons = cur.fetchone()[0]
+    logging.info(f"Doublons détectés (non insérés) : {nb_doublons}")
+
+    # Insertion uniquement des lignes qui n'existent pas déjà
+    cur.execute(f"""
+        INSERT INTO {TABLE_NAME}
+        SELECT * FROM tmp_insee_ref t
+        WHERE NOT EXISTS (
+            SELECT 1 FROM {TABLE_NAME} r
+            WHERE
+                r.nom = t.nom
+                AND r.prenoms = t.prenoms
+                AND r.sexe = t.sexe
+                AND r.date_naissance = t.date_naissance
+                AND r.code_insee_lieu_naissance = t.code_insee_lieu_naissance
+                AND r.commune_naissance = t.commune_naissance
+                AND r.date_deces = t.date_deces
+        )
+    """)
+    nb_inserted = cur.rowcount
+    conn.commit()
+    
+    logging.info(f"Lignes insérées : {nb_inserted} | Doublons ignorés : {nb_doublons}")
 
     cur.close()
     conn.close()
-    logging.info(f"{len(csv_data.splitlines())} lignes traitées et insérées selon le mode '{mode}'.")
