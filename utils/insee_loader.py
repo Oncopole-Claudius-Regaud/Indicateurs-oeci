@@ -180,8 +180,7 @@ def load_to_postgres(mode="monthly", **context):
         date_naissance DATE,
         code_insee_lieu_naissance TEXT,
         commune_naissance TEXT,
-        date_deces DATE,
-        date_import DATE
+        date_deces DATE
     )
     """
     cur.execute(create_stmt)
@@ -215,7 +214,7 @@ def load_to_postgres(mode="monthly", **context):
     )
     conn.commit()
 
-    # Contrôle de doublons AVANT insertion
+    # ✅ Contrôle de doublons AVANT insertion
     # Compter les doublons potentiels
     cur.execute(f"""
         SELECT COUNT(*) FROM tmp_insee_ref t
@@ -234,10 +233,11 @@ def load_to_postgres(mode="monthly", **context):
     nb_doublons = cur.fetchone()[0]
     logging.info(f"Doublons détectés (non insérés) : {nb_doublons}")
 
-    # Insertion uniquement des lignes qui n'existent pas déjà
+    # Insertion uniquement des lignes qui n'existent pas déjà (SANS date_import)
     cur.execute(f"""
-        INSERT INTO {TABLE_NAME}
-        SELECT * FROM tmp_insee_ref t
+        INSERT INTO {TABLE_NAME} (nom, prenoms, sexe, date_naissance, code_insee_lieu_naissance, commune_naissance, date_deces)
+        SELECT nom, prenoms, sexe, date_naissance, code_insee_lieu_naissance, commune_naissance, date_deces
+        FROM tmp_insee_ref t
         WHERE NOT EXISTS (
             SELECT 1 FROM {TABLE_NAME} r
             WHERE
