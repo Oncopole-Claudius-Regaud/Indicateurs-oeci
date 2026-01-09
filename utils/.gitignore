@@ -1,0 +1,16 @@
+#python
+__pycache__/
+*.pyc
+
+# Virtualenv
+venv/
+.env/
+
+# Airflow
+airflow.db
+airflow.cfg
+logs/
+
+# IDE
+.vscode/
+.idea/
