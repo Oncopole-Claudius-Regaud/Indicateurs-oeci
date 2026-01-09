@@ -1,10 +1,13 @@
-
+import sys
+import os
 from datetime import datetime
 from airflow import DAG
 from airflow.models import Variable
-from utils.email_notifier import notify_failure
-from oeci.utils.loader import load_to_postgresql
-from utils.extract import extract_all_data_streaming
+sys.path.append(os.path.dirname(__file__))
+sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
+from utils.loader import load_to_postgresql
 from airflow.operators.python import PythonOperator
 
 default_args = {

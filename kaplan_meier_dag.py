@@ -1,5 +1,6 @@
 # ==============================================================================
-
+import sys
+import os
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from datetime import datetime
@@ -7,6 +8,7 @@ from datetime import datetime
 # Importation des fonctions de traitement (à adapter si l'import vient de 'utils.db')
 # Exemple si vous deviez importer le hook : 
 # from utils.db import get_postgres_hook
+sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
 from kaplan_meier_processing import (
     extract_and_clean_data_task, 
     calculate_kaplan_meier_task, 

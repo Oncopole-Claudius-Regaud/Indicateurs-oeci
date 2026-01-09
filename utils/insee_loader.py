@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import psycopg2
 from io import StringIO
 import os
-from oeci.utils.db import get_postgres_hook
+from utils.db import get_postgres_hook
 import re
 import time
 import csv

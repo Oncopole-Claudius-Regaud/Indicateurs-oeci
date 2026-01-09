@@ -1,8 +1,13 @@
+import sys
+import os
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from datetime import datetime
 # importe la fonction du module (alias fourni)
-from oeci.utils.process_insee_rattrapage_full_replace_strict import (
+sys.path.append(os.path.dirname(__file__))
+sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from utils.process_insee_rattrapage_full_replace_strict import (
     process_insee_rattrapage_full_replace  # alias de *_strict
 )
 

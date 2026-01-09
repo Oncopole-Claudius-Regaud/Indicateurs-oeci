@@ -1,4 +1,5 @@
 import os
+import sys
 import logging
 import re
 from io import StringIO
@@ -6,7 +7,10 @@ from glob import glob
 from pathlib import Path
 
 import pandas as pd
-from oeci.utils.db import get_postgres_hook
+sys.path.append(os.path.dirname(__file__))
+sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from utils.db import get_postgres_hook
 
 TABLE_NAME = "oeci.insee_ref"
 

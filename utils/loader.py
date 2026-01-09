@@ -1,18 +1,20 @@
 import logging
 import json
 import os
+import sys
 import csv
 from typing import Iterable, Dict, Any, List, Tuple
 import pandas as pd
 from psycopg2.extras import execute_values
 
+# utilise TA fonction
+sys.path.append(os.path.dirname(__file__))
+sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.models import Variable
 from psycopg2.extras import execute_values
-
-# utilise TA fonction
-from utils.helpers import compute_diagnostic_hash
-
 # --------------------------------------------------------------------
 # Config
 # --------------------------------------------------------------------
