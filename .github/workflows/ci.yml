@@ -1,0 +1,30 @@
+name: Deploy Indicateurs OECI
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update repo on server
+        run: |
+          set -e
+
+          TARGET="$HOME/airflow/dags/Indicateurs-oeci"
+          mkdir -p "$TARGET"
+
+          echo "Deploying files to $TARGET"
+
+          git ls-files | while read file; do
+            mkdir -p "$TARGET/$(dirname "$file")"
+            cp "$file" "$TARGET/$file"
+          done
+
+          echo "Deployment finished"
