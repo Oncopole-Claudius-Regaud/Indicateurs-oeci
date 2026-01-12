@@ -1,4 +1,23 @@
-insee_month_rattrapage/
-__init__.py
-README.md
+# Python
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environnements
+.env
+.venv/
+venv/
+
+# Airflow / runtime
+airflow.db
+logs/
+insee_month_rattrapage/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
