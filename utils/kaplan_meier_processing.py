@@ -120,11 +120,6 @@ def calculate_kaplan_meier_task(ti, date_debut_observation_filtre, **kwargs):
     df_km_final['date_diag_tkc'] = pd.to_datetime(df_km_final['date_diag_tkc'], errors='coerce')
     df_km_final['date_derniere_nouvelle'] = pd.to_datetime(df_km_final['date_derniere_nouvelle'], errors='coerce')
 
-    DATE_OBS_FILTRE = pd.to_datetime(date_debut_observation_filtre)
-    df_km_final = df_km_final[
-        df_km_final['date_diag_tkc'] >= DATE_OBS_FILTRE
-    ].copy()
-
     # Calcul de la Durée de Survie et Événement
     df_km_final['time_years'] = (
         df_km_final['date_derniere_nouvelle'] - df_km_final['date_diag_tkc']

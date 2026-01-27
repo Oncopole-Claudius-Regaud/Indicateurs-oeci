@@ -22,6 +22,15 @@ DEFAULT_ARGS = {
     'retries': 1,
 }
 
+# Liste fixe des organes à traiter
+ORGANE_LIST = [
+"SEIN",
+"UROLOGIE",
+"GYNECOLOGIE",
+"ORL, VADS",
+"PEAU",
+]
+
 # L'ID de connexion PostgreSQL à utiliser
 # Nous pouvons le laisser implicite pour utiliser la Variable.get dans le processing,
 # ou le définir ici si l'on veut le passer explicitement :
@@ -36,10 +45,8 @@ with DAG(
 ) as dag:
     
     # Définition des paramètres dynamiques
-    ORGANE_PARAM = "{{ dag_run.conf.get('organe', 'SEIN') }}"
-    DATE_DEBUT_OBS_PARAM = "{{ dag_run.conf.get('date_debut_obs', '2000') }}"
-    DATE_FIN_OBS_PARAM = "{{ dag_run.conf.get('date_fin_obs', '2025') }}"
-    DATE_FILTRE_DIAG = "2010-01-01" 
+    DATE_DEBUT_OBS_PARAM = "{{ dag_run.conf.get('date_debut_obs', '2020') }}"
+    DATE_FIN_OBS_PARAM = "{{ dag_run.conf.get('date_fin_obs', macros.datetime.now().year) }}"
     
     
     # 1. Extraction et Nettoyage
@@ -58,9 +65,6 @@ with DAG(
     calculate_km = PythonOperator(
         task_id='calculate_kaplan_meier',
         python_callable=calculate_kaplan_meier_task,
-        op_kwargs={
-            'date_debut_observation_filtre': DATE_FILTRE_DIAG,
-        },
     )
 
     # 3. Chargement des données de la Courbe
