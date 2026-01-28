@@ -7,6 +7,7 @@ from datetime import datetime
 from io import StringIO
 import numpy as np
 from lifelines import KaplanMeierFitter
+from sqlalchemy import text
 
 # ==============================================================================
 # Utils DB
@@ -25,12 +26,7 @@ def get_db_engine(hook):
 # 1. Extraction & nettoyage
 # ==============================================================================
 
-def extract_and_clean_data_task(
-    organe,
-    date_debut_obs,
-    date_fin_obs,
-    conn_id=None
-):
+def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=None):
     hook = get_postgres_hook(conn_id)
     engine = get_db_engine(hook)
 
@@ -64,7 +60,9 @@ def extract_and_clean_data_task(
     ORDER BY t_base.ipp_ocr, t_base.annee;
     """
 
-    df = pd.read_sql_query(query, engine)
+    # ✅ pandas + SQLAlchemy : passer une Connection, pas l'Engine
+    with engine.connect() as conn:
+        df = pd.read_sql_query(text(query), conn)
 
     # Nettoyage Python
     df["ipp_ocr"] = df["ipp_ocr"].fillna("")
@@ -152,6 +150,16 @@ def load_to_db_task(
     if not results:
         return
 
+    # ==========================================================
+    # 1. TRUNCATE de la table cible (par organe / slug)
+    # ==========================================================
+    truncate_sql = f"TRUNCATE TABLE datamart_oeci_survie.{table_name};"
+    hook.run(truncate_sql)
+    print(f"🧹 Table vidée : datamart_oeci_survie.{table_name}")
+
+    # ==========================================================
+    # 2. Construction du DataFrame à charger
+    # ==========================================================
     if table_name.startswith("datamart_km_curve"):
         df = pd.read_json(StringIO(results["curve_data"]))
         df["date_start_obs"] = kwargs.get("date_debut_obs")
@@ -165,6 +173,9 @@ def load_to_db_task(
 
     df["run_date"] = datetime.now()
 
+    # ==========================================================
+    # 3. Chargement
+    # ==========================================================
     df.to_sql(
         table_name,
         engine,
@@ -174,3 +185,4 @@ def load_to_db_task(
     )
 
     print(f"✅ Chargement OK → {table_name} ({len(df)} lignes)")
+
