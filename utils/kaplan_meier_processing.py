@@ -7,6 +7,7 @@ from datetime import datetime
 from io import StringIO
 import numpy as np
 from lifelines import KaplanMeierFitter
+from sqlalchemy import text
 
 # ==============================================================================
 # Utils DB
@@ -135,31 +136,20 @@ def calculate_kaplan_meier_task(ti, **kwargs):
 # 3. Chargement en base
 # ==============================================================================
 
-def load_to_db_task(
-    ti,
-    table_name,
-    conn_id=None,
-    **kwargs
-):
-    hook = get_postgres_hook(conn_id)
-    engine = get_db_engine(hook)
+def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
 
+    hook = get_postgres_hook(conn_id)
+    conn = hook.get_conn()
+
+    # Récupération des résultats depuis la task amont (calculate_kaplan_meier_<slug>)
     upstream_task_id = list(ti.task.upstream_task_ids)[0]
     results = ti.xcom_pull(task_ids=upstream_task_id)
 
     if not results:
+        print("Aucun résultat récupéré depuis XCom. Fin de la tâche.")
         return
 
-    # ==========================================================
-    # 1. TRUNCATE de la table cible (par organe / slug)
-    # ==========================================================
-    truncate_sql = f"TRUNCATE TABLE datamart_oeci_survie.{table_name};"
-    hook.run(truncate_sql)
-    print(f"🧹 Table vidée : datamart_oeci_survie.{table_name}")
-
-    # ==========================================================
-    # 2. Construction du DataFrame à charger
-    # ==========================================================
+    # Construire le DF à charger
     if table_name.startswith("datamart_km_curve"):
         df = pd.read_json(StringIO(results["curve_data"]))
         df["date_start_obs"] = kwargs.get("date_debut_obs")
@@ -173,16 +163,19 @@ def load_to_db_task(
 
     df["run_date"] = datetime.now()
 
-    # ==========================================================
-    # 3. Chargement
-    # ==========================================================
+    full_table = f"datamart_oeci_survie.{table_name}"
+
+    conn.execute(text(f"TRUNCATE TABLE {full_table};"))
+    print(f"🧹 Table vidée : {full_table}")
+
+    # 2) Charger
     df.to_sql(
-        table_name,
-        engine,
+        name=table_name,
+        con=conn,
         schema="datamart_oeci_survie",
         if_exists="append",
         index=False,
     )
 
-    print(f"✅ Chargement OK → {table_name} ({len(df)} lignes)")
+    print(f"✅ Chargement OK → {full_table} ({len(df)} lignes)")
 
