@@ -60,8 +60,7 @@ def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=No
     """
 
     # ✅ pandas + SQLAlchemy : passer une Connection, pas l'Engine
-    with engine.connect() as conn:
-        df = pd.read_sql_query(query, conn)
+    df = pd.read_sql_query(query, engine)
 
     # Nettoyage Python
     df["ipp_ocr"] = df["ipp_ocr"].fillna("")
