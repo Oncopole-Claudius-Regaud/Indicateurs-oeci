@@ -103,8 +103,18 @@ def extract_and_clean_data_task(
     # Sérialisation du DF en JSON pour le transport via XCom
     return df_survie_km_factorise.to_json(date_format='iso')
 
+def get_organe_suffix(organe: str) -> str:
+    mapping = {
+        "ORL, VADS": "orl",
+        "PEAU": "hemato",
+        "SEIN": "sein",
+        "UROLOGIE": "urologie",
+        "GYNECOLOGIE": "gynecologie",
+    }
+    return mapping.get(organe, organe.lower())
 
-def calculate_kaplan_meier_task(ti, date_debut_observation_filtre, **kwargs):
+
+def calculate_kaplan_meier_task(ti, **kwargs):
     """
     Désérialise le DataFrame, effectue l'analyse KM, et structure les résultats.
     (Aucun changement majeur ici, la logique de calcul reste la même)
@@ -203,18 +213,22 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
     ORGAN = kwargs['dag_run'].conf.get('organe', 'UNKNOWN')
     DATE_DEB = kwargs['dag_run'].conf.get('date_debut_obs', 'UNKNOWN')
     DATE_FIN = kwargs['dag_run'].conf.get('date_fin_obs', 'UNKNOWN')
+
+    organe_suffix = get_organe_suffix(ORGAN)
+
+    target_table = f"{table_name}_{organe_suffix}"
     
     # Déterminer la donnée à charger
-    if table_name == 'datamart_km_curve':
+    if target_table == 'datamart_km_curve':
         df_to_load = pd.read_json(StringIO(results['curve_data']), orient='records')
         df_to_load['date_start_obs'] = DATE_DEB
         df_to_load['date_end_obs'] = DATE_FIN
         
-    elif table_name == 'datamart_km_key_indicators':
+    elif target_table == 'datamart_km_key_indicators':
         df_to_load = pd.DataFrame(results['key_indicators'])
         
     else:
-        raise ValueError(f"Nom de table inconnu : {table_name}")
+        raise ValueError(f"Nom de table inconnu : {target_table}")
 
     # Ajouter les colonnes de traçabilité communes
     df_to_load['organe'] = ORGAN
@@ -222,7 +236,7 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
 
     # Chargement dans la base de données
     df_to_load.to_sql(
-        table_name, 
+        target_table, 
         engine, 
         if_exists='append', 
         index=False,
