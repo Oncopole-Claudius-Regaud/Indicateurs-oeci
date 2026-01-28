@@ -7,7 +7,6 @@ from datetime import datetime
 from io import StringIO
 import numpy as np
 from lifelines import KaplanMeierFitter
-from sqlalchemy import text
 
 # ==============================================================================
 # Utils DB
@@ -62,7 +61,7 @@ def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=No
 
     # ✅ pandas + SQLAlchemy : passer une Connection, pas l'Engine
     with engine.connect() as conn:
-        df = pd.read_sql_query(text(query), conn)
+        df = pd.read_sql_query(query, conn)
 
     # Nettoyage Python
     df["ipp_ocr"] = df["ipp_ocr"].fillna("")
