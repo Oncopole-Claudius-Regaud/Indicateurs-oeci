@@ -3,7 +3,7 @@ name: Deploy Indicateurs OECI
 on:
   push:
     branches:
-      - develop
+      - dynamique_organe
 
 jobs:
   deploy:
