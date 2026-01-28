@@ -139,7 +139,7 @@ def calculate_kaplan_meier_task(ti, **kwargs):
 def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
 
     hook = get_postgres_hook(conn_id)
-    conn = hook.get_conn()
+    cursor = hook.cursor()
 
     # Récupération des résultats depuis la task amont (calculate_kaplan_meier_<slug>)
     upstream_task_id = list(ti.task.upstream_task_ids)[0]
@@ -165,13 +165,13 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
 
     full_table = f"datamart_oeci_survie.{table_name}"
 
-    conn.execute(text(f"TRUNCATE TABLE {full_table};"))
+    cursor.execute(text(f"TRUNCATE TABLE {full_table};"))
     print(f"🧹 Table vidée : {full_table}")
 
     # 2) Charger
     df.to_sql(
         name=table_name,
-        con=conn,
+        con=cursor,
         schema="datamart_oeci_survie",
         if_exists="append",
         index=False,
