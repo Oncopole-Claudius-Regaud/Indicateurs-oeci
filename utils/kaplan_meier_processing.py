@@ -27,8 +27,6 @@ def get_db_engine(hook):
 
 def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=None):
     hook = get_postgres_hook(conn_id)
-    engine = get_db_engine(hook)
-
     FULL_TABLE_PATH = "datamart_oeci_survie.v_statut_vital"
 
     query = f"""
@@ -60,7 +58,11 @@ def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=No
     """
 
     # ✅ pandas + SQLAlchemy : passer une Connection, pas l'Engine
-    df = pd.read_sql_query(query, engine)
+    conn = hook.get_conn()
+    try:
+        df = pd.read_sql_query(query, conn)
+    finally:
+        conn.close()
 
     # Nettoyage Python
     df["ipp_ocr"] = df["ipp_ocr"].fillna("")
