@@ -133,12 +133,16 @@ def calculate_kaplan_meier_task(ti, **kwargs):
 # ==============================================================================
 
 def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
+    """
+    Charge les résultats Kaplan-Meier dans PostgreSQL en psycopg2 pur (execute_values).
+    - TRUNCATE la table cible
+    - INSERT bulk
+    - Respecte les colonnes du DDL (IDs et run_date en DEFAULT)
+    """
+    from psycopg2.extras import execute_values
 
     pg_hook = get_postgres_hook(conn_id)
-    pg_conn = pg_hook.get_conn()
-    pg_cur = pg_conn.cursor()
 
-    # Récupération des résultats depuis la task amont (calculate_kaplan_meier_<slug>)
     upstream_task_id = list(ti.task.upstream_task_ids)[0]
     results = ti.xcom_pull(task_ids=upstream_task_id)
 
@@ -146,33 +150,107 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
         print("Aucun résultat récupéré depuis XCom. Fin de la tâche.")
         return
 
-    # Construire le DF à charger
-    if table_name.startswith("datamart_km_curve"):
-        df = pd.read_json(StringIO(results["curve_data"]))
-        df["date_start_obs"] = kwargs.get("date_debut_obs")
-        df["date_end_obs"] = kwargs.get("date_fin_obs")
+    schema = "datamart_oeci_survie"
+    full_table = f"{schema}.{table_name}"
 
-    elif table_name.startswith("datamart_km_key_indicators"):
-        df = pd.DataFrame(results["key_indicators"])
+    # ⚠️ organe et dates obs viennent du DAG via op_kwargs
+    organe = kwargs.get("organe")
+    if not organe:
+        raise ValueError("Paramètre 'organe' manquant dans op_kwargs (DAG).")
 
-    else:
-        raise ValueError(f"Table inconnue : {table_name}")
+    date_debut_obs = kwargs.get("date_debut_obs")
+    date_fin_obs = kwargs.get("date_fin_obs")
 
-    df["run_date"] = datetime.now()
+    pg_conn = pg_hook.get_conn()
+    try:
+        with pg_conn.cursor() as cur:
+            # 1) TRUNCATE
+            cur.execute(f"TRUNCATE TABLE {full_table};")
+            print(f"🧹 Table vidée : {full_table}")
 
-    full_table = f"datamart_oeci_survie.{table_name}"
+            # 2) Préparer INSERT selon la table
+            if table_name.startswith("datamart_km_curve"):
+                # DDL attend:
+                # time_years, survival_rate, ic_lower, ic_upper, organe, date_start_obs, date_end_obs
+                curve_df = pd.read_json(StringIO(results["curve_data"]))
+                curve_df = curve_df.replace({np.nan: None})
 
-    pg_cur.execute(text(f"TRUNCATE TABLE {full_table};"))
-    print(f"🧹 Table vidée : {full_table}")
+                insert_cols = [
+                    "time_years",
+                    "survival_rate",
+                    "ic_lower",
+                    "ic_upper",
+                    "organe",
+                    "date_start_obs",
+                    "date_end_obs",
+                ]
 
-    # 2) Charger
-    df.to_sql(
-        name=table_name,
-        con=pg_cur,
-        schema="datamart_oeci_survie",
-        if_exists="append",
-        index=False,
-    )
+                rows = []
+                for r in curve_df.itertuples(index=False):
+                    rows.append((
+                        r.time_years,
+                        r.survival_rate,
+                        r.ic_lower,
+                        r.ic_upper,
+                        organe,
+                        date_debut_obs,
+                        date_fin_obs,
+                    ))
 
-    print(f"✅ Chargement OK → {full_table} ({len(df)} lignes)")
+                insert_sql = f"""
+                    INSERT INTO {full_table} ({", ".join(insert_cols)})
+                    VALUES %s
+                """
+
+                if rows:
+                    execute_values(cur, insert_sql, rows, page_size=1000)
+                print(f"✅ Insert curve: {len(rows)} lignes → {full_table}")
+
+            elif table_name.startswith("datamart_km_key_indicators"):
+                # DDL attend:
+                # time_point, survival_rate, ic_range, ic_low_pct, ic_high_pct, organe
+                kpi_df = pd.DataFrame(results["key_indicators"])
+                if not kpi_df.empty:
+                    kpi_df = kpi_df.replace({np.nan: None})
+
+                insert_cols = [
+                    "time_point",
+                    "survival_rate",
+                    "ic_range",
+                    "ic_low_pct",
+                    "ic_high_pct",
+                    "organe",
+                ]
+
+                rows = []
+                for r in kpi_df.itertuples(index=False):
+                    rows.append((
+                        int(r.time_point) if r.time_point is not None else None,
+                        r.survival_rate,
+                        getattr(r, "ic_range", None),   # présent si ton calculate le renvoie
+                        getattr(r, "ic_low_pct", None),
+                        getattr(r, "ic_high_pct", None),
+                        organe,
+                    ))
+
+                insert_sql = f"""
+                    INSERT INTO {full_table} ({", ".join(insert_cols)})
+                    VALUES %s
+                """
+
+                if rows:
+                    execute_values(cur, insert_sql, rows, page_size=1000)
+                print(f"✅ Insert KPI: {len(rows)} lignes → {full_table}")
+
+            else:
+                raise ValueError(f"Table inconnue : {table_name}")
+
+        pg_conn.commit()
+
+    except Exception:
+        pg_conn.rollback()
+        raise
+    finally:
+        pg_conn.close()
+
 
