@@ -26,7 +26,8 @@ ORGANE_CONFIG = {
     "UROLOGIE": "urologie",
     "GYNECOLOGIE": "gynecologie",
     "ORL, VADS": "orl",
-    "PEAU": "hemato",
+    "PEAU": "peau",
+    "SYSTEME HEMATOPOIETIQUE": "hemato"
 }
 
 POSTGRES_CONN_ID = "postgres_test"
