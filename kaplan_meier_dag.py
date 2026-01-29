@@ -67,6 +67,9 @@ with DAG(
             python_callable=load_to_db_task,
             op_kwargs={
                 'table_name': f'datamart_km_curve_{organe_slug}',
+                'organe': organe,
+                'date_debut_obs': DATE_DEBUT_OBS_PARAM,
+                'date_fin_obs': DATE_FIN_OBS_PARAM,
             },
         )
 
@@ -76,6 +79,9 @@ with DAG(
             python_callable=load_to_db_task,
             op_kwargs={
                 'table_name': f'datamart_km_key_indicators_{organe_slug}',
+                'organe': organe,
+                'date_debut_obs': DATE_DEBUT_OBS_PARAM,
+                'date_fin_obs': DATE_FIN_OBS_PARAM,
             },
         )
 
