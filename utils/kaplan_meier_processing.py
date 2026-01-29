@@ -18,10 +18,6 @@ def get_postgres_hook(conn_id=None):
         conn_id = Variable.get("target_pg_conn_id", default_var="postgres_test")
     return PostgresHook(postgres_conn_id=conn_id)
 
-
-def get_db_engine(hook):
-    return hook.get_sqlalchemy_engine()
-
 # ==============================================================================
 # 1. Extraction & nettoyage
 # ==============================================================================
@@ -138,8 +134,9 @@ def calculate_kaplan_meier_task(ti, **kwargs):
 
 def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
 
-    hook = get_postgres_hook(conn_id)
-    cursor = hook.cursor()
+    pg_hook = get_postgres_hook(conn_id)
+    pg_conn = pg_hook.get_conn()
+    pg_cur = pg_conn.cursor()
 
     # Récupération des résultats depuis la task amont (calculate_kaplan_meier_<slug>)
     upstream_task_id = list(ti.task.upstream_task_ids)[0]
@@ -165,13 +162,13 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
 
     full_table = f"datamart_oeci_survie.{table_name}"
 
-    cursor.execute(text(f"TRUNCATE TABLE {full_table};"))
+    pg_cur.execute(text(f"TRUNCATE TABLE {full_table};"))
     print(f"🧹 Table vidée : {full_table}")
 
     # 2) Charger
     df.to_sql(
         name=table_name,
-        con=cursor,
+        con=pg_cur,
         schema="datamart_oeci_survie",
         if_exists="append",
         index=False,
