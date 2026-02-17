@@ -363,7 +363,7 @@ def load_to_postgresql(**kwargs):
 
     chir_path = "/tmp/etl_iris/chirurgie.jsonl"
     pg_table = "oeci.chirurgie"
-    cols_target = ["ipp_ocr", "nom_interv", "dat_deb_reel", "dat_fin_reel", "patient_key", "code_ccam", "i_state"]
+    cols_target = ["ipp_ocr", "nom_interv", "dat_deb_reel", "dat_fin_reel", "patient_key", "code_ccam"]
     cols_csv = ", ".join(cols_target)
 
     # --- Vérification du fichier source
