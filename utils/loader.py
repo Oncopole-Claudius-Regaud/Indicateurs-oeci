@@ -293,8 +293,6 @@ def load_to_postgresql(**kwargs):
         if dedup_key in seen_diag:
             continue
         seen_diag.add(dedup_key)
-
-        diag_hash = compute_diagnostic_hash(row_dict)
         diag_buffer.append((
             row_dict["ipp_ocr"],
             none_if_empty(row_dict["diagnostic_start_date"]),
@@ -305,7 +303,6 @@ def load_to_postgresql(**kwargs):
             none_if_empty(row_dict["cim_updated_at"]),
             none_if_empty(row_dict["diagnostic_end_date"]),
             none_if_empty(d.get("code_morphologique")),
-            diag_hash,
         ))
         if len(diag_buffer) >= BATCH_SIZE:
             _flush_values(pg_cur, """
