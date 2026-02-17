@@ -348,21 +348,21 @@ def load_to_postgresql(**kwargs):
     logging.info(f"Chargement terminé : {pg_cur.rowcount} lignes insérées dans oeci.radioth.")
 
     # ---------------- CHIRURGIE ----------------
-    logging.info(" Début du chargement de oeci.chirurgie depuis /tmp/etl_iris/chirurgie.jsonl...")
+    logging.info("Début du chargement de oeci.chirurgie depuis /tmp/etl_iris/chirurgie.jsonl...")
 
     chir_path = "/tmp/etl_iris/chirurgie.jsonl"
     pg_table = "oeci.chirurgie"
-    cols_target = ["ipp_ocr", "nom_interv", "dat_deb_reel", "dat_fin_reel", "patient_key", "code_ccam"]
+    cols_target = ["ipp_ocr", "nom_interv", "dat_deb_reel", "dat_fin_reel", "patient_key", "code_ccam", "i_state"]
     cols_csv = ", ".join(cols_target)
 
     # --- Vérification du fichier source
     if not os.path.exists(chir_path):
-        raise FileNotFoundError(f" Fichier {chir_path} introuvable.")
+        raise FileNotFoundError(f"Fichier {chir_path} introuvable.")
 
     # --- Lecture du fichier JSONL
     df_chir = pd.read_json(chir_path, lines=True)
-    logging.info(f" {len(df_chir)} lignes lues depuis {chir_path}")
-    logging.info(f" Colonnes détectées : {list(df_chir.columns)}")
+    logging.info(f"{len(df_chir)} lignes lues depuis {chir_path}")
+    logging.info(f"Colonnes détectées : {list(df_chir.columns)}")
 
     # --- Renommage des colonnes pour correspondre à la table cible
     rename_map = {
@@ -371,31 +371,55 @@ def load_to_postgresql(**kwargs):
         "I_ACTUAL_START": "dat_deb_reel",
         "I_ACTUAL_END": "dat_fin_reel",
         "I_PATIENT_KEY": "patient_key",
-        "IN_CODE": "code_ccam"
+        "IN_CODE": "code_ccam",
+        "I_STATE": "i_state",
     }
     df_chir.rename(columns=rename_map, inplace=True)
 
-    # fallback planned si actual manquant (si tu as gardé les colonnes planned)
-    df_chir["dat_deb_reel"] = df_chir["dat_deb_reel"].fillna(df_chir.get("I_PLANNED_START"))
-    df_chir["dat_fin_reel"] = df_chir["dat_fin_reel"].fillna(df_chir.get("I_PLANNED_END"))
+    # --- Fallback planned si actual manquant (si les colonnes planned existent dans le JSONL)
+    if "dat_deb_reel" in df_chir.columns:
+        df_chir["dat_deb_reel"] = df_chir["dat_deb_reel"].fillna(df_chir.get("I_PLANNED_START"))
+    if "dat_fin_reel" in df_chir.columns:
+        df_chir["dat_fin_reel"] = df_chir["dat_fin_reel"].fillna(df_chir.get("I_PLANNED_END"))
 
-    # --- Conversion des dates depuis timestamp (ms) → format YYYY-MM-DD
+    # --- Contrôle + typage i_state
+    if "i_state" not in df_chir.columns:
+        logging.warning("⚠️ Colonne I_STATE absente du JSONL : aucune ligne ne sera gardée (filtre i_state non null).")
+        df_chir["i_state"] = pd.NA
+
+    df_chir["i_state"] = pd.to_numeric(df_chir["i_state"], errors="coerce").astype("Int64")
+
+    # --- Filtre : i_state doit être NON NULL et != -1
+    before = len(df_chir)
+    df_chir = df_chir[df_chir["i_state"].notna() & (df_chir["i_state"] != -1)]
+    removed = before - len(df_chir)
+    logging.info(f"🧹 {removed} lignes supprimées (i_state NULL ou i_state = -1).")
+    logging.info("📊 Distribution i_state (top 10) : %s",
+                df_chir["i_state"].value_counts(dropna=False).head(10).to_dict())
+
+    # --- Conversion des dates (robuste : fonctionne si déjà timestamp ISO ou datetime)
     for col in ["dat_deb_reel", "dat_fin_reel"]:
         if col in df_chir.columns:
-            df_chir[col] = pd.to_datetime(df_chir[col], unit="ms", errors="coerce")
+            df_chir[col] = pd.to_datetime(df_chir[col], errors="coerce")
             df_chir[col] = df_chir[col].dt.strftime("%Y-%m-%d")
 
-    # --- Conversion des autres colonnes en string
+    # --- Conversion des autres colonnes en string (sauf dates)
     for col in df_chir.columns:
-        if not col.startswith("dat_"):
+        if col not in ["dat_deb_reel", "dat_fin_reel"]:
             df_chir[col] = df_chir[col].astype(str).replace("nan", "").fillna("")
 
     # --- Nettoyage final : remplacer NaN/NaT par None
     df_chir = df_chir.where(pd.notnull(df_chir), None)
 
     # --- Log d'exemple des dates converties
-    logging.info(" Exemple de dates converties :")
-    logging.info(df_chir[["dat_deb_reel", "dat_fin_reel"]].head(5).to_dict("records"))
+    logging.info("Exemple de lignes après nettoyage :")
+    to_log_cols = [c for c in ["ipp_ocr", "nom_interv", "dat_deb_reel", "dat_fin_reel", "code_ccam", "i_state"] if c in df_chir.columns]
+    logging.info(df_chir[to_log_cols].head(5).to_dict("records"))
+
+    # --- Vérification colonnes requises avant insert
+    missing = [c for c in cols_target if c not in df_chir.columns]
+    if missing:
+        raise ValueError(f"Colonnes manquantes pour l'insertion dans {pg_table}: {missing}")
 
     # --- Chargement PostgreSQL
     pg_cur.execute(f"TRUNCATE TABLE {pg_table} CASCADE;")
@@ -414,7 +438,7 @@ def load_to_postgresql(**kwargs):
             """, buffer)
             pg_conn.commit()
             count_total += len(buffer)
-            logging.info(f" {count_total:,} lignes insérées ...")
+            logging.info(f"{count_total:,} lignes insérées ...")
             buffer.clear()
 
     # Dernier lot
@@ -426,7 +450,8 @@ def load_to_postgresql(**kwargs):
         pg_conn.commit()
         count_total += len(buffer)
 
-    logging.info(f" Chargement terminé : {count_total:,} lignes insérées dans {pg_table}.")
+    logging.info(f"Chargement terminé : {count_total:,} lignes insérées dans {pg_table}.")
+
 
     #----------------RDV--------------
     logging.info(" Début du chargement de oeci.rdv depuis osiris.rdv...")
