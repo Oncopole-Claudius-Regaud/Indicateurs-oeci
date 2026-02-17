@@ -368,12 +368,16 @@ def load_to_postgresql(**kwargs):
     rename_map = {
         "P_CODE": "ipp_ocr",
         "I_LABEL": "nom_interv",
-        "I_PLANNED_START": "dat_deb_reel",
-        "I_PLANNED_END": "dat_fin_reel",
+        "I_ACTUAL_START": "dat_deb_reel",
+        "I_ACTUAL_END": "dat_fin_reel",
         "I_PATIENT_KEY": "patient_key",
         "IN_CODE": "code_ccam"
     }
     df_chir.rename(columns=rename_map, inplace=True)
+
+    # fallback planned si actual manquant (si tu as gardé les colonnes planned)
+    df_chir["dat_deb_reel"] = df_chir["dat_deb_reel"].fillna(df_chir.get("I_PLANNED_START"))
+    df_chir["dat_fin_reel"] = df_chir["dat_fin_reel"].fillna(df_chir.get("I_PLANNED_END"))
 
     # --- Conversion des dates depuis timestamp (ms) → format YYYY-MM-DD
     for col in ["dat_deb_reel", "dat_fin_reel"]:
@@ -388,10 +392,6 @@ def load_to_postgresql(**kwargs):
 
     # --- Nettoyage final : remplacer NaN/NaT par None
     df_chir = df_chir.where(pd.notnull(df_chir), None)
-
-    # --- Filtrage ipp_ocr >= 2021
-    df_chir = df_chir[df_chir["ipp_ocr"].astype(str).str.match(r"^(2021|202[2-9]|203[0-9])")]
-    logging.info(f" {len(df_chir)} lignes après filtrage sur ipp_ocr >= 2021")
 
     # --- Log d'exemple des dates converties
     logging.info(" Exemple de dates converties :")
