@@ -98,7 +98,7 @@ def _flush_values(cur, sql_stmt: str, buffer: List[Tuple], label: str = "", comm
 # --------------------------------------------------------------------
 def extract_treatments_to_file(pg_conn):
     """Extraction progressive depuis osiris.treatment_line vers un CSV local."""
-    logging.info(" Début de l'extraction depuis osiris.treatment_line (stream)...")
+    logging.info(" Début de l'extraction depuis osiris.chimiotherapie (stream)...")
 
     os.makedirs(TMP_DIR, exist_ok=True)
     pg_cur = pg_conn.cursor()
@@ -120,7 +120,7 @@ def extract_treatments_to_file(pg_conn):
             doseadm,
             etat_code,
             code_cim
-        FROM osiris.treatment_line
+        FROM osiris.chimiotherapie
     """)
 
     total = 0
@@ -142,16 +142,16 @@ def extract_treatments_to_file(pg_conn):
 
 
 def load_treatments_from_file(pg_conn):
-    """Chargement du fichier CSV vers la table oeci.traitements."""
-    logging.info(f"🚀 Chargement vers oeci.traitements depuis {TMP_FILE_TRT}...")
+    """Chargement du fichier CSV vers la table oeci.chimiotherapie."""
+    logging.info(f"🚀 Chargement vers oeci.chimiotherapie depuis {TMP_FILE_TRT}...")
 
     pg_cur = pg_conn.cursor()
-    pg_cur.execute("TRUNCATE TABLE oeci.traitements CASCADE;")
+    pg_cur.execute("TRUNCATE TABLE oeci.chimiotherapie CASCADE;")
     pg_conn.commit()
 
     with open(TMP_FILE_TRT, "r", encoding="utf-8") as f:
         pg_cur.copy_expert("""
-            COPY oeci.traitements (
+            COPY oeci.chimiotherapie (
                 ipp_ocr,  treatment_label, treatment_comment,
                 protocol_name, protocol_detail, protocol_category, protocol_type,
                 valid_protocol, start_date, end_date, radiation,
