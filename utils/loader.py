@@ -379,19 +379,13 @@ def load_to_postgresql(**kwargs):
     rename_map = {
         "P_CODE": "ipp_ocr",
         "I_LABEL": "nom_interv",
-        "I_ACTUAL_START": "dat_deb_reel",
-        "I_ACTUAL_END": "dat_fin_reel",
+        "I_PLANNED_START": "dat_deb_reel",
+        "I_PLANNED_END": "dat_fin_reel",
         "I_PATIENT_KEY": "patient_key",
         "IN_CODE": "code_ccam",
         "I_STATE": "i_state",
     }
     df_chir.rename(columns=rename_map, inplace=True)
-
-    # --- Fallback planned si actual manquant (si les colonnes planned existent dans le JSONL)
-    if "dat_deb_reel" in df_chir.columns:
-        df_chir["dat_deb_reel"] = df_chir["dat_deb_reel"].fillna(df_chir.get("I_PLANNED_START"))
-    if "dat_fin_reel" in df_chir.columns:
-        df_chir["dat_fin_reel"] = df_chir["dat_fin_reel"].fillna(df_chir.get("I_PLANNED_END"))
 
     # --- Contrôle + typage i_state
     if "i_state" not in df_chir.columns:
