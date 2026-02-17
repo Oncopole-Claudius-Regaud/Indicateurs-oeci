@@ -266,33 +266,36 @@ def load_to_postgresql(**kwargs):
 
     # ---------------- DIAGNOSTICS ----------------
     pg_cur.execute("TRUNCATE TABLE oeci.diagnostics CASCADE;")
+
     diag_buffer: List[Tuple] = []
     seen_diag = set()
 
     for d in _stream_rows("diagnostic"):
         row_dict = {
             "ipp_ocr": d.get("ipp_ocr"),
-            "concept_id": d.get("concept_id"),
             "diagnostic_source_value": d.get("diagnostic_source_value") or d.get("condition_source_value"),
             "diagnostic_concept_label": d.get("diagnostic_concept_label") or d.get("condition_concept_label"),
-            "libelle_cim_reference": d.get("libelle_cim") or d.get("libelle_cim_reference"),
             "diagnostic_start_date": d.get("diagnostic_start_date") or d.get("condition_start_date") or d.get("date_diagnostic"),
             "diagnostic_end_date": d.get("diagnostic_end_date") or d.get("condition_end_date"),
             "diagnostic_status": d.get("diagnostic_status") or d.get("condition_status"),
             "diagnostic_create_date": d.get("diagnostic_create_date") or d.get("condition_create_date"),
-            "cim_created_at": d.get("cim_created_at"),
             "cim_updated_at": d.get("cim_updated_at") or d.get("diagnostic_update_date") or d.get("condition_update_date"),
-            "cim_active_from": d.get("cim_active_from"),
-            "cim_active_to": d.get("cim_active_to"),
             "code_morphologique": d.get("code_morphologique"),
         }
+
         if not row_dict["ipp_ocr"]:
             continue
 
-        dedup_key = (row_dict["ipp_ocr"], row_dict["diagnostic_source_value"], row_dict["diagnostic_start_date"])
+        # dédoublonnage applicatif
+        dedup_key = (
+            row_dict["ipp_ocr"],
+            row_dict["diagnostic_source_value"],
+            row_dict["diagnostic_start_date"],
+        )
         if dedup_key in seen_diag:
             continue
         seen_diag.add(dedup_key)
+
         diag_buffer.append((
             row_dict["ipp_ocr"],
             none_if_empty(row_dict["diagnostic_start_date"]),
@@ -302,27 +305,38 @@ def load_to_postgresql(**kwargs):
             none_if_empty(row_dict["diagnostic_create_date"]),
             none_if_empty(row_dict["cim_updated_at"]),
             none_if_empty(row_dict["diagnostic_end_date"]),
-            none_if_empty(d.get("code_morphologique")),
+            none_if_empty(row_dict["code_morphologique"]),
         ))
+
         if len(diag_buffer) >= BATCH_SIZE:
             _flush_values(pg_cur, """
                 INSERT INTO oeci.diagnostics (
-                    ipp_ocr, date_diagnostic, code_cim, libelle_cim,
+                    ipp_ocr,
+                    date_diagnostic,
+                    code_cim,
+                    libelle_cim,
                     diagnostic_status,
-                    date_diagnostic_created_at, date_diagnostic_updated_at, date_diagnostic_end,
-                    code_morphologique, diagnostic_hash
+                    date_diagnostic_created_at,
+                    date_diagnostic_updated_at,
+                    date_diagnostic_end,
+                    code_morphologique
                 ) VALUES %s
-                ON CONFLICT (diagnostic_hash) DO NOTHING
             """, diag_buffer, label="diagnostics (batch)", commit_conn=pg_conn)
+
     _flush_values(pg_cur, """
         INSERT INTO oeci.diagnostics (
-            ipp_ocr, date_diagnostic, code_cim, libelle_cim,
+            ipp_ocr,
+            date_diagnostic,
+            code_cim,
+            libelle_cim,
             diagnostic_status,
-            date_diagnostic_created_at, date_diagnostic_updated_at, date_diagnostic_end,
-            code_morphologique, diagnostic_hash
+            date_diagnostic_created_at,
+            date_diagnostic_updated_at,
+            date_diagnostic_end,
+            code_morphologique
         ) VALUES %s
-        ON CONFLICT (diagnostic_hash) DO NOTHING
     """, diag_buffer, label="diagnostics (final)", commit_conn=pg_conn)
+
 
     # ---------------- RADIO_THERAPIE ----------------
     logging.info(" Début du chargement de oeci.radioth depuis osiris.radioth...")
