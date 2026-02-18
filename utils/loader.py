@@ -399,56 +399,20 @@ def load_to_postgresql(**kwargs):
     df_chir = df_chir[df_chir["i_state"].notna() & (df_chir["i_state"] != -1)]
     removed = before - len(df_chir)
     logging.info(f"🧹 {removed} lignes supprimées (i_state NULL ou i_state = -1).")
-    logging.info("📊 Distribution i_state (top 10) : %s",
-                df_chir["i_state"].value_counts(dropna=False).head(10).to_dict())
 
-    # =========================
-    # LOGS DEBUG AVANT PARSING
-    # =========================
+    # --- Conversion des dates -> STRING 'YYYY-MM-DD' (gère epoch millisecondes + strings)
     for col in ["dat_deb_reel", "dat_fin_reel"]:
         if col in df_chir.columns:
-            logging.info(
-                "DEBUG AVANT PARSE %s: dtype=%s | non_null=%s | uniques_sample=%s",
-                col,
-                df_chir[col].dtype,
-                int(df_chir[col].notna().sum()),
-                df_chir[col].dropna().astype(str).head(10).tolist(),
-            )
-            logging.info(
-                "DEBUG AVANT PARSE %s (repr): %s",
-                col,
-                [repr(x) for x in df_chir[col].dropna().head(10).tolist()],
-            )
-        else:
-            logging.warning("DEBUG: colonne %s absente du dataframe après rename.", col)
+            s = df_chir[col]
 
-    # --- Conversion des dates -> STRING 'YYYY-MM-DD'
-    for col in ["dat_deb_reel", "dat_fin_reel"]:
-        if col in df_chir.columns:
-            raw = df_chir[col].astype(str).replace("nan", "").fillna("").str.strip()
+            if pd.api.types.is_numeric_dtype(s):
+                dt = pd.to_datetime(s, unit="ms", errors="coerce")
+            else:
+                raw = s.astype(str).replace("nan", "").fillna("").str.strip()
+                dt = pd.to_datetime(raw, errors="coerce")
 
-            # parse
-            dt = pd.to_datetime(raw, errors="coerce")
-
-            # logs parse
-            nat_count = int(dt.isna().sum())
-            total_count = len(dt)
-            logging.info("DEBUG PARSE %s: NaT=%s/%s", col, nat_count, total_count)
-
-            if nat_count > 0:
-                bad_examples = raw[dt.isna()].head(10).tolist()
-                logging.info("DEBUG PARSE %s: exemples non parsables (raw) = %s", col, bad_examples)
-
-            # format string
             df_chir[col] = dt.dt.strftime("%Y-%m-%d")
-            df_chir.loc[dt.isna(), col] = None  # invalide -> NULL
-
-            # logs après format
-            logging.info(
-                "DEBUG APRES PARSE %s: sample=%s",
-                col,
-                df_chir[col].dropna().astype(str).head(10).tolist()
-            )
+            df_chir.loc[dt.isna(), col] = None
 
     # --- Autres colonnes en string (hors dates)
     for col in df_chir.columns:
@@ -457,11 +421,6 @@ def load_to_postgresql(**kwargs):
 
     # --- Nettoyage final : remplacer NaN/NaT par None
     df_chir = df_chir.where(pd.notnull(df_chir), None)
-
-    # --- Log d'exemple des lignes après nettoyage
-    logging.info("Exemple de lignes après nettoyage :")
-    to_log_cols = [c for c in ["ipp_ocr", "nom_interv", "dat_deb_reel", "dat_fin_reel", "code_ccam", "i_state"] if c in df_chir.columns]
-    logging.info(df_chir[to_log_cols].head(5).to_dict("records"))
 
     # --- Vérification colonnes requises avant insert
     missing = [c for c in cols_target if c not in df_chir.columns]
@@ -479,10 +438,11 @@ def load_to_postgresql(**kwargs):
     for row in records:
         buffer.append(tuple(row))
         if len(buffer) >= BATCH_SIZE:
-            execute_values(pg_cur, f"""
-                INSERT INTO {pg_table} ({cols_csv})
-                VALUES %s
-            """, buffer)
+            execute_values(
+                pg_cur,
+                f"INSERT INTO {pg_table} ({cols_csv}) VALUES %s",
+                buffer
+            )
             pg_conn.commit()
             count_total += len(buffer)
             logging.info(f"{count_total:,} lignes insérées ...")
@@ -490,10 +450,11 @@ def load_to_postgresql(**kwargs):
 
     # Dernier lot
     if buffer:
-        execute_values(pg_cur, f"""
-            INSERT INTO {pg_table} ({cols_csv})
-            VALUES %s
-        """, buffer)
+        execute_values(
+            pg_cur,
+            f"INSERT INTO {pg_table} ({cols_csv}) VALUES %s",
+            buffer
+        )
         pg_conn.commit()
         count_total += len(buffer)
 
