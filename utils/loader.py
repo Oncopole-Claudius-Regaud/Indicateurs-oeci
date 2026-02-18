@@ -402,13 +402,53 @@ def load_to_postgresql(**kwargs):
     logging.info("📊 Distribution i_state (top 10) : %s",
                 df_chir["i_state"].value_counts(dropna=False).head(10).to_dict())
 
+    # =========================
+    # LOGS DEBUG AVANT PARSING
+    # =========================
+    for col in ["dat_deb_reel", "dat_fin_reel"]:
+        if col in df_chir.columns:
+            logging.info(
+                "DEBUG AVANT PARSE %s: dtype=%s | non_null=%s | uniques_sample=%s",
+                col,
+                df_chir[col].dtype,
+                int(df_chir[col].notna().sum()),
+                df_chir[col].dropna().astype(str).head(10).tolist(),
+            )
+            logging.info(
+                "DEBUG AVANT PARSE %s (repr): %s",
+                col,
+                [repr(x) for x in df_chir[col].dropna().head(10).tolist()],
+            )
+        else:
+            logging.warning("DEBUG: colonne %s absente du dataframe après rename.", col)
+
     # --- Conversion des dates -> STRING 'YYYY-MM-DD'
     for col in ["dat_deb_reel", "dat_fin_reel"]:
         if col in df_chir.columns:
             raw = df_chir[col].astype(str).replace("nan", "").fillna("").str.strip()
+
+            # parse
             dt = pd.to_datetime(raw, errors="coerce")
+
+            # logs parse
+            nat_count = int(dt.isna().sum())
+            total_count = len(dt)
+            logging.info("DEBUG PARSE %s: NaT=%s/%s", col, nat_count, total_count)
+
+            if nat_count > 0:
+                bad_examples = raw[dt.isna()].head(10).tolist()
+                logging.info("DEBUG PARSE %s: exemples non parsables (raw) = %s", col, bad_examples)
+
+            # format string
             df_chir[col] = dt.dt.strftime("%Y-%m-%d")
             df_chir.loc[dt.isna(), col] = None  # invalide -> NULL
+
+            # logs après format
+            logging.info(
+                "DEBUG APRES PARSE %s: sample=%s",
+                col,
+                df_chir[col].dropna().astype(str).head(10).tolist()
+            )
 
     # --- Autres colonnes en string (hors dates)
     for col in df_chir.columns:
@@ -418,7 +458,7 @@ def load_to_postgresql(**kwargs):
     # --- Nettoyage final : remplacer NaN/NaT par None
     df_chir = df_chir.where(pd.notnull(df_chir), None)
 
-    # --- Log d'exemple des dates converties
+    # --- Log d'exemple des lignes après nettoyage
     logging.info("Exemple de lignes après nettoyage :")
     to_log_cols = [c for c in ["ipp_ocr", "nom_interv", "dat_deb_reel", "dat_fin_reel", "code_ccam", "i_state"] if c in df_chir.columns]
     logging.info(df_chir[to_log_cols].head(5).to_dict("records"))
@@ -458,6 +498,7 @@ def load_to_postgresql(**kwargs):
         count_total += len(buffer)
 
     logging.info(f"Chargement terminé : {count_total:,} lignes insérées dans {pg_table}.")
+
 
 
     #----------------RDV--------------
