@@ -402,16 +402,18 @@ def load_to_postgresql(**kwargs):
     logging.info("📊 Distribution i_state (top 10) : %s",
                 df_chir["i_state"].value_counts(dropna=False).head(10).to_dict())
 
-    # --- Conversion des dates (robuste : fonctionne si déjà timestamp ISO ou datetime)
+    # --- Conversion des dates -> STRING 'YYYY-MM-DD'
     for col in ["dat_deb_reel", "dat_fin_reel"]:
         if col in df_chir.columns:
-            df_chir[col] = pd.to_datetime(df_chir[col], errors="coerce")
-            df_chir[col] = df_chir[col].dt.strftime("%Y-%m-%d")
+            raw = df_chir[col].astype(str).replace("nan", "").fillna("").str.strip()
+            dt = pd.to_datetime(raw, errors="coerce")
+            df_chir[col] = dt.dt.strftime("%Y-%m-%d")
+            df_chir.loc[dt.isna(), col] = None  # invalide -> NULL
 
-    # --- Conversion des autres colonnes en string (sauf dates)
+    # --- Autres colonnes en string (hors dates)
     for col in df_chir.columns:
         if col not in ["dat_deb_reel", "dat_fin_reel"]:
-            df_chir[col] = df_chir[col].astype(str).replace("nan", "").fillna("")
+            df_chir[col] = df_chir[col].astype(str).replace("nan", "").fillna("").str.strip()
 
     # --- Nettoyage final : remplacer NaN/NaT par None
     df_chir = df_chir.where(pd.notnull(df_chir), None)
