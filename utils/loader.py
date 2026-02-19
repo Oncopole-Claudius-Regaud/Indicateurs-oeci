@@ -105,21 +105,20 @@ def extract_treatments_to_file(pg_conn):
     pg_cur.execute("""
         DECLARE trt_cursor CURSOR FOR
         SELECT
-            ipp_ocr,
-            treatment_label,
-            treatment_comment,
-            protocol_name,
-            protocol_detail,
-            protocol_category,
-            protocol_type,
-            valid_protocol,
-            start_date,
-            end_date,
-            radiation,
-            record_hash,
-            doseadm,
-            etat_code,
-            code_cim
+            num_doss,
+            jour,
+            dat_admini,
+            cod_categ_proto,
+            cod_typ_proto,
+            num_pdt,
+            nom_pdt,
+            cod_voie,
+            uf_real,
+            lib_uf_real,
+            dose_tot,
+            nom_proto,
+            nom_moda,
+            ce_etat_chimio
         FROM osiris.chimiotherapie
     """)
 
@@ -152,10 +151,10 @@ def load_treatments_from_file(pg_conn):
     with open(TMP_FILE_TRT, "r", encoding="utf-8") as f:
         pg_cur.copy_expert("""
             COPY oeci.chimiotherapie (
-                ipp_ocr,  treatment_label, treatment_comment,
-                protocol_name, protocol_detail, protocol_category, protocol_type,
-                valid_protocol, start_date, end_date, radiation,
-                record_hash, doseadm, etat_code, code_cim
+                num_doss,  jour, dat_admini,
+                cod_categ_proto, cod_typ_proto, num_pdt, nom_pdt,
+                cod_voie, uf_real, lib_uf_real, dose_tot,
+                nom_proto, nom_moda, ce_etat_chimio
             )
             FROM STDIN WITH (FORMAT csv, DELIMITER '|', NULL '', HEADER false)
         """, f)
