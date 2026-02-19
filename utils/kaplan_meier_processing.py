@@ -28,12 +28,20 @@ def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=No
 
     query = f"""
     SELECT
-    ipp_ocr, code_cim_tkc, organe,
-    date_diag_tkc, date_diag_dcc, date_derniere_nouvelle, statut_vital
+        ipp_ocr,
+        code_cim,
+        organe,
+        date_diag_tkc,
+        date_diag_dcc,
+        date_derniere_nouvelle,
+        statut_vital
     FROM {FULL_TABLE_PATH}
     WHERE organe = '{organe}'
-    AND EXTRACT(YEAR FROM COALESCE(date_diag_tkc, date_diag_dcc))::int
-        = SUBSTRING('{date_debut_obs}' FROM 1 FOR 4)::int
+      AND organe IS NOT NULL
+      AND code_cim IS NOT NULL
+      AND COALESCE(date_diag_tkc, date_diag_dcc) IS NOT NULL
+      AND EXTRACT(YEAR FROM COALESCE(date_diag_tkc, date_diag_dcc))::int
+            = SUBSTRING('{date_debut_obs}' FROM 1 FOR 4)::int
     ;
     """
 
@@ -45,6 +53,7 @@ def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=No
 
     df["ipp_ocr"] = df["ipp_ocr"].fillna("")
     return df.to_json(date_format="iso")
+
 
 # ==============================================================================
 # 2. Calcul Kaplan-Meier
