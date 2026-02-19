@@ -174,6 +174,10 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
     date_debut_obs = kwargs.get("date_debut_obs")
     date_fin_obs = kwargs.get("date_fin_obs")
 
+    # ✅ Correction: tes colonnes sont varchar(4) -> on stocke l'année uniquement
+    date_start_obs_year = str(date_debut_obs)[:4] if date_debut_obs is not None else None
+    date_end_obs_year = str(date_fin_obs)[:4] if date_fin_obs is not None else None
+
     pg_conn = pg_hook.get_conn()
     try:
         with pg_conn.cursor() as cur:
@@ -206,8 +210,8 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
                         r.ic_lower,
                         r.ic_upper,
                         organe,
-                        date_debut_obs,
-                        date_fin_obs,
+                        date_start_obs_year,
+                        date_end_obs_year,
                     ))
 
                 insert_sql = f"""
@@ -240,7 +244,7 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
                     rows.append((
                         int(r.time_point) if r.time_point is not None else None,
                         r.survival_rate,
-                        getattr(r, "ic_range", None),   # présent si ton calculate le renvoie
+                        getattr(r, "ic_range", None),
                         getattr(r, "ic_low_pct", None),
                         getattr(r, "ic_high_pct", None),
                         organe,
@@ -265,5 +269,6 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
         raise
     finally:
         pg_conn.close()
+
 
 
