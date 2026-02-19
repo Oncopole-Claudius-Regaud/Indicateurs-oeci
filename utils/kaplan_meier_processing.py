@@ -32,11 +32,8 @@ def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=No
     date_diag_tkc, date_diag_dcc, date_derniere_nouvelle, statut_vital
     FROM {FULL_TABLE_PATH}
     WHERE organe = '{organe}'
-    -- cohorte = année de diagnostic
     AND EXTRACT(YEAR FROM COALESCE(date_diag_tkc, date_diag_dcc))::int
         = SUBSTRING('{date_debut_obs}' FROM 1 FOR 4)::int
-    -- cut-off : pas de diag après la fin d'observation
-    AND COALESCE(date_diag_tkc, date_diag_dcc) <= '{date_fin_obs}'::date
     ;
     """
 
