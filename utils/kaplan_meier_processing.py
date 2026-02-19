@@ -27,52 +27,27 @@ def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=No
     FULL_TABLE_PATH = "datamart_oeci_survie.v_statut_vital"
 
     query = f"""
-    WITH patient_min_annee AS (
-        SELECT ipp_ocr, MIN(annee) AS annee_debut_suivi
-        FROM {FULL_TABLE_PATH}
-        WHERE organe = '{organe}'
-        GROUP BY ipp_ocr
-    ),
-    patient_statut_final AS (
-        SELECT DISTINCT ON (t1.ipp_ocr)
-            t1.ipp_ocr, t1.statut_vital, t1.annee
-        FROM {FULL_TABLE_PATH} t1
-        WHERE t1.organe = '{organe}'
-          AND t1.annee <= SUBSTRING('{date_fin_obs}' FROM 1 FOR 4)::int
-        ORDER BY t1.ipp_ocr, t1.annee DESC, t1.date_derniere_nouvelle DESC
-    )
-    SELECT t_base.*
-    FROM {FULL_TABLE_PATH} t_base
-    JOIN patient_min_annee min_annee
-        ON t_base.ipp_ocr = min_annee.ipp_ocr
-    JOIN patient_statut_final final_statut
-        ON t_base.ipp_ocr = final_statut.ipp_ocr
-    WHERE t_base.organe = '{organe}'
-      AND min_annee.annee_debut_suivi >= SUBSTRING('{date_debut_obs}' FROM 1 FOR 4)::int
-      AND final_statut.statut_vital <> 'PDV'
-      AND t_base.annee <= SUBSTRING('{date_fin_obs}' FROM 1 FOR 4)::int
-    ORDER BY t_base.ipp_ocr, t_base.annee;
+    SELECT
+    ipp_ocr, code_cim_tkc, organe,
+    date_diag_tkc, date_diag_dcc, date_derniere_nouvelle, statut_vital
+    FROM {FULL_TABLE_PATH}
+    WHERE organe = '{organe}'
+    -- cohorte = année de diagnostic
+    AND EXTRACT(YEAR FROM COALESCE(date_diag_tkc, date_diag_dcc))::int
+        = SUBSTRING('{date_debut_obs}' FROM 1 FOR 4)::int
+    -- cut-off : pas de diag après la fin d'observation
+    AND COALESCE(date_diag_tkc, date_diag_dcc) <= '{date_fin_obs}'::date
+    ;
     """
 
-    # ✅ pandas + SQLAlchemy : passer une Connection, pas l'Engine
     conn = hook.get_conn()
     try:
         df = pd.read_sql_query(query, conn)
     finally:
         conn.close()
 
-    # Nettoyage Python
     df["ipp_ocr"] = df["ipp_ocr"].fillna("")
-    df["ipp_prefix"] = df["ipp_ocr"].str[:4]
-
-    masque_final = (
-        (df["ipp_prefix"] >= "2000")
-        & df["date_diag_tkc"].notna()
-        & df["date_derniere_nouvelle"].notna()
-    )
-
-    df_final = df[masque_final].copy()
-    return df_final.to_json(date_format="iso")
+    return df.to_json(date_format="iso")
 
 # ==============================================================================
 # 2. Calcul Kaplan-Meier
@@ -86,39 +61,79 @@ def calculate_kaplan_meier_task(ti, **kwargs):
         raise ValueError("Aucune donnée XCom reçue")
 
     df = pd.read_json(StringIO(df_json))
-    df["date_diag_tkc"] = pd.to_datetime(df["date_diag_tkc"])
-    df["date_derniere_nouvelle"] = pd.to_datetime(df["date_derniere_nouvelle"])
 
-    df["time_years"] = (
-        (df["date_derniere_nouvelle"] - df["date_diag_tkc"])
-        .dt.days / 365.25
-    )
+    end_obs = pd.to_datetime(kwargs.get("date_fin_obs"), errors="coerce")
 
-    df["event_observed"] = np.where(
-        df["statut_vital"] == "Décédé", 1, 0
+    # Dates (dayfirst=True utile si dcc est au format 29/08/2023)
+    df["date_diag_tkc"] = pd.to_datetime(df.get("date_diag_tkc"), errors="coerce")
+    df["date_diag_dcc"] = pd.to_datetime(df.get("date_diag_dcc"), errors="coerce", dayfirst=True)
+    df["date_derniere_nouvelle"] = pd.to_datetime(df.get("date_derniere_nouvelle"), errors="coerce")
+
+    # Date diag ref : TKC sinon DCC
+    df["date_diag_ref"] = df["date_diag_tkc"].fillna(df["date_diag_dcc"])
+
+    # Garder exploitable
+    df = df[df["date_diag_ref"].notna() & df["date_derniere_nouvelle"].notna()].copy()
+
+    # Censure à date_fin_obs : fin de suivi = min(dernière nouvelle, fin obs)
+    if pd.notna(end_obs):
+        df["date_end_followup"] = df["date_derniere_nouvelle"].where(
+            df["date_derniere_nouvelle"] <= end_obs, end_obs
+        )
+    else:
+        df["date_end_followup"] = df["date_derniere_nouvelle"]
+
+    # 1 ligne par IPP :
+    # - diag = min
+    # - fin suivi = max (après censure)
+    # - statut_final = statut de la ligne avec dernière_nouvelle max (avant censure)
+    idx_last = df.groupby("ipp_ocr")["date_derniere_nouvelle"].idxmax()
+    statut_last = df.loc[idx_last, ["ipp_ocr", "statut_vital", "date_derniere_nouvelle"]].set_index("ipp_ocr")
+
+    df_patient = df.groupby("ipp_ocr").agg(
+        date_diag_ref=("date_diag_ref", "min"),
+        date_end_followup=("date_end_followup", "max"),
+    ).join(statut_last[["statut_vital", "date_derniere_nouvelle"]], how="left").reset_index()
+
+    # Event dans la fenêtre : si Décédé ET décès (approché) <= fin_obs
+    # (ici on suppose que "date_derniere_nouvelle" correspond à la date de décès quand statut=Décédé)
+    if pd.notna(end_obs):
+        df_patient["event_observed"] = np.where(
+            (df_patient["statut_vital"] == "Décédé") & (df_patient["date_derniere_nouvelle"] <= end_obs),
+            1, 0
+        )
+    else:
+        df_patient["event_observed"] = np.where(df_patient["statut_vital"] == "Décédé", 1, 0)
+
+    # Temps
+    df_patient["time_years"] = (
+        (df_patient["date_end_followup"] - df_patient["date_diag_ref"]).dt.days / 365.25
     )
+    df_patient = df_patient[df_patient["time_years"].notna() & (df_patient["time_years"] >= 0)].copy()
+
+    if df_patient.empty:
+        raise ValueError("Après nettoyage, aucune ligne exploitable pour Kaplan-Meier.")
 
     kmf = KaplanMeierFitter()
-    kmf.fit(df["time_years"], df["event_observed"])
+    kmf.fit(df_patient["time_years"], event_observed=df_patient["event_observed"])
 
-    curve_df = kmf.survival_function_.join(
-        kmf.confidence_interval_survival_function_
-    ).reset_index()
-
-    curve_df.columns = [
-        "time_years", "survival_rate", "ic_lower", "ic_upper"
-    ]
+    curve_df = (
+        kmf.survival_function_
+        .join(kmf.confidence_interval_survival_function_)
+        .reset_index()
+    )
+    curve_df.columns = ["time_years", "survival_rate", "ic_lower", "ic_upper"]
 
     key_indicators = []
     for t in [1, 5, 10]:
         try:
-            surv = kmf.survival_function_at_times(t).iloc[0] * 100
+            surv = float(kmf.survival_function_at_times(t).iloc[0]) * 100
             ci = kmf.confidence_interval_survival_function_.loc[:t].iloc[-1] * 100
             key_indicators.append({
                 "time_point": t,
                 "survival_rate": round(surv, 2),
-                "ic_low_pct": round(ci.iloc[0], 2),
-                "ic_high_pct": round(ci.iloc[1], 2),
+                "ic_low_pct": round(float(ci.iloc[0]), 2),
+                "ic_high_pct": round(float(ci.iloc[1]), 2),
             })
         except Exception:
             pass
@@ -127,6 +142,7 @@ def calculate_kaplan_meier_task(ti, **kwargs):
         "curve_data": curve_df.to_json(orient="records"),
         "key_indicators": key_indicators,
     }
+
 
 # ==============================================================================
 # 3. Chargement en base

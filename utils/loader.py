@@ -94,10 +94,10 @@ def _flush_values(cur, sql_stmt: str, buffer: List[Tuple], label: str = "", comm
 
 
 # --------------------------------------------------------------------
-# TRAITEMENTS depuis OSIRIS → fichier → COPY
+# CHIMIOTHERAPIE depuis OSIRIS → fichier → COPY
 # --------------------------------------------------------------------
 def extract_treatments_to_file(pg_conn):
-    """Extraction progressive depuis osiris.treatment_line vers un CSV local."""
+    """Extraction progressive depuis osiris.CHIMIOTHERAPIE vers un CSV local."""
     logging.info(" Début de l'extraction depuis osiris.chimiotherapie (stream)...")
 
     os.makedirs(TMP_DIR, exist_ok=True)
@@ -160,7 +160,7 @@ def load_treatments_from_file(pg_conn):
         """, f)
     pg_conn.commit()
     pg_cur.close()
-    logging.info(" Chargement complet dans oeci.traitements.")
+    logging.info(" Chargement complet dans oeci.chimiotherapie.")
 
 
 # --------------------------------------------------------------------

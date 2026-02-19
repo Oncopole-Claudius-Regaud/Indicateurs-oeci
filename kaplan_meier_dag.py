@@ -42,7 +42,7 @@ with DAG(
 ) as dag:
 
     DATE_DEBUT_OBS_PARAM = "{{ dag_run.conf.get('date_debut_obs', '2020') }}"
-    DATE_FIN_OBS_PARAM = "{{ dag_run.conf.get('date_fin_obs', macros.datetime.now().year) }}"
+    DATE_FIN_OBS_PARAM = "{{ dag_run.conf.get('date_fin_obs', macros.datetime.now().strftime('%Y-%m-%d')) }}"
 
     for organe, organe_slug in ORGANE_CONFIG.items():
 
@@ -61,6 +61,9 @@ with DAG(
         calculate_task = PythonOperator(
             task_id=f'calculate_kaplan_meier_{organe_slug}',
             python_callable=calculate_kaplan_meier_task,
+            op_kwargs={
+                'date_fin_obs': DATE_FIN_OBS_PARAM
+            },
         )
 
         # 3. Chargement des données de la Courbe
