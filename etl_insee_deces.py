@@ -9,8 +9,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from utils.insee_loader import (
-    download_insee_file,
-    load_to_postgres
+    download_insee_file
 )
 
 default_args = {
@@ -23,7 +22,7 @@ default_args = {
 dag = DAG(
     dag_id="etl_insee_deces_monthly",
     default_args=default_args,
-    description="Import du fichier mensuel INSEE des décès",
+    description="Telechargement du fichier mensuel INSEE des deces",
     schedule_interval="0 6 10 * *",  # chaque 10 du mois à 6h00
     catchup=False,
     tags=["insee", "deces", "mensuel"]
@@ -37,11 +36,3 @@ download = PythonOperator(
     dag=dag
 )
 
-load = PythonOperator(
-    task_id="load_to_postgres",
-    python_callable=load_to_postgres,
-    provide_context=True,
-    dag=dag
-)
-
-download >> load
