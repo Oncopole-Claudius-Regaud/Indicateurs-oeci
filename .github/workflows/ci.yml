@@ -12,19 +12,27 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      - name: Update repo on server
+      - name: Deploy using git reset --hard
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           TARGET="$HOME/airflow/dags/Indicateurs-oeci"
-          mkdir -p "$TARGET"
+          SRC="$GITHUB_WORKSPACE"
+          SHA="$GITHUB_SHA"
+          BRANCH="$GITHUB_REF_NAME"
 
-          echo "Deploying files to $TARGET"
+          # 1) Clone initial depuis le workspace (pas besoin d'auth)
+          if [ ! -d "$TARGET/.git" ]; then
+            rm -rf "$TARGET"
+            git clone "$SRC" "$TARGET"
+          fi
 
-          git ls-files | while read file; do
-            mkdir -p "$TARGET/$(dirname "$file")"
-            cp "$file" "$TARGET/$file"
-          done
-
-          echo "Deployment finished"
+          # 2) Mettre TARGET exactement sur le commit du push
+          git -C "$TARGET" fetch "$SRC" "$SHA"
+          git -C "$TARGET" checkout -B "$BRANCH" "$SHA"
+          git -C "$TARGET" reset --hard "$SHA"
+          git -C "$TARGET" clean -fd
