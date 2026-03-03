@@ -8,46 +8,34 @@ on:
 jobs:
   deploy:
     runs-on: self-hosted
-
     steps:
-      - name: Checkout repository (full history)
+      - name: Checkout repository (FULL history)
         uses: actions/checkout@v4
         with:
           ref: dynamique_organe
           fetch-depth: 0
           fetch-tags: false
 
-      - name: Deploy using git (clean working tree)
+      - name: Deploy (fresh clone from workspace, clean)
         shell: bash
         run: |
           set -euo pipefail
 
           TARGET="$HOME/airflow/dags/Indicateurs-oeci"
-          SRC="$GITHUB_WORKSPACE"
           BRANCH="${GITHUB_REF_NAME}"
 
+          # Sanity: confirmer que le workspace n'est pas shallow
+          git -C "$GITHUB_WORKSPACE" rev-parse --is-shallow-repository
+
+          # Repartir propre pour éviter un .git incomplet/corrompu
+          rm -rf "$TARGET"
           mkdir -p "$(dirname "$TARGET")"
 
-          # Si TARGET existe mais est shallow (ou cassé), on repart propre
-          if [ -d "$TARGET/.git" ]; then
-            if [ "$(git -C "$TARGET" rev-parse --is-shallow-repository 2>/dev/null || echo false)" = "true" ]; then
-              rm -rf "$TARGET"
-            fi
-          fi
+          # --no-local évite les hardlinks / effets bizarres entre repos locaux
+          git clone --no-local --branch "$BRANCH" "$GITHUB_WORKSPACE" "$TARGET"
 
-          # Clone initial depuis le workspace (pas besoin d'auth)
-          if [ ! -d "$TARGET/.git" ]; then
-            rm -rf "$TARGET"
-            git clone "$SRC" "$TARGET"
-          fi
-
-          # Fetch depuis le workspace et alignement strict sur la branche
-          git -C "$TARGET" remote remove src 2>/dev/null || true
-          git -C "$TARGET" remote add src "$SRC"
-
-          git -C "$TARGET" fetch --prune src "+refs/heads/$BRANCH:refs/remotes/src/$BRANCH"
-          git -C "$TARGET" checkout -B "$BRANCH" "refs/remotes/src/$BRANCH"
-          git -C "$TARGET" reset --hard "refs/remotes/src/$BRANCH"
+          # (Optionnel mais utile) nettoyage
+          git -C "$TARGET" reset --hard
           git -C "$TARGET" clean -fd
 
-          echo "Deployed branch $BRANCH into $TARGET"
+          git -C "$TARGET" status
