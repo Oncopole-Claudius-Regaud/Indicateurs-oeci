@@ -3,7 +3,7 @@ name: Deploy Indicateurs OECI
 on:
   push:
     branches:
-      - dynamique_organe
+      - insee_machine_learning
 
 jobs:
   deploy:

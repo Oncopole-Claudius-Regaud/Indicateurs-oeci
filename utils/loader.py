@@ -93,6 +93,100 @@ def _flush_values(cur, sql_stmt: str, buffer: List[Tuple], label: str = "", comm
     buffer.clear()
 
 
+def _split_schema_table(full_table_name: str) -> Tuple[str, str]:
+    """Extrait schema/table depuis `schema.table` (schema=public par défaut)."""
+    if "." in full_table_name:
+        schema, table = full_table_name.split(".", 1)
+        return schema, table
+    return "public", full_table_name
+
+
+def _to_pg_value(v):
+    """Normalise une valeur pour insertion PostgreSQL."""
+    if isinstance(v, (dict, list)):
+        return json.dumps(v, ensure_ascii=False)
+    return none_if_empty(v)
+
+
+def _load_jsonl_to_table(pg_conn, pg_cur, jsonl_path: str, target_table: str):
+    """
+    Charge un JSONL dans une table PostgreSQL en mappant les clés JSON
+    (insensibles à la casse) aux colonnes de la table cible.
+    """
+    logging.info(f"[ETL] Début du chargement de {target_table} depuis {jsonl_path}...")
+
+    if not os.path.exists(jsonl_path):
+        raise FileNotFoundError(f"Fichier source introuvable: {jsonl_path}")
+
+    schema_name, table_name = _split_schema_table(target_table)
+    pg_cur.execute(
+        """
+        SELECT column_name, is_nullable, column_default
+        FROM information_schema.columns
+        WHERE table_schema = %s
+          AND table_name = %s
+        ORDER BY ordinal_position
+        """,
+        (schema_name, table_name),
+    )
+    col_meta = pg_cur.fetchall()
+    if not col_meta:
+        raise ValueError(f"Table cible introuvable ou sans colonnes: {target_table}")
+
+    stream = _rows_from_ndjson(jsonl_path)
+    first_row = next(stream, None)
+    if first_row is None:
+        logging.warning(f"[ETL] Fichier vide: {jsonl_path}")
+        pg_cur.execute(f"TRUNCATE TABLE {target_table} CASCADE;")
+        pg_conn.commit()
+        return
+
+    source_cols = {str(k).lower() for k in first_row.keys()}
+    table_cols = [r[0] for r in col_meta]
+    insert_cols = [c for c in table_cols if c.lower() in source_cols]
+
+    required_missing = [
+        col_name for col_name, is_nullable, col_default in col_meta
+        if col_name.lower() not in source_cols and is_nullable == "NO" and col_default is None
+    ]
+    if required_missing:
+        raise ValueError(
+            f"Colonnes obligatoires manquantes dans {jsonl_path} pour {target_table}: {required_missing}"
+        )
+    if not insert_cols:
+        raise ValueError(f"Aucune colonne commune entre {jsonl_path} et {target_table}")
+
+    cols_sql = ", ".join(insert_cols)
+    insert_sql = f"INSERT INTO {target_table} ({cols_sql}) VALUES %s"
+
+    pg_cur.execute(f"TRUNCATE TABLE {target_table} CASCADE;")
+    pg_conn.commit()
+
+    buffer: List[Tuple] = []
+    inserted = 0
+
+    def row_to_tuple(row_dict: Dict[str, Any]) -> Tuple:
+        normalized = {str(k).lower(): _to_pg_value(v) for k, v in row_dict.items()}
+        return tuple(normalized.get(c.lower()) for c in insert_cols)
+
+    buffer.append(row_to_tuple(first_row))
+    for row in stream:
+        buffer.append(row_to_tuple(row))
+        if len(buffer) >= BATCH_SIZE:
+            execute_values(pg_cur, insert_sql, buffer)
+            pg_conn.commit()
+            inserted += len(buffer)
+            logging.info(f"[ETL] {target_table}: {inserted:,} lignes insérées...")
+            buffer.clear()
+
+    if buffer:
+        execute_values(pg_cur, insert_sql, buffer)
+        pg_conn.commit()
+        inserted += len(buffer)
+
+    logging.info(f"[ETL] Chargement terminé dans {target_table}: {inserted:,} lignes.")
+
+
 # --------------------------------------------------------------------
 # CHIMIOTHERAPIE depuis OSIRIS → fichier → COPY
 # --------------------------------------------------------------------
@@ -460,6 +554,14 @@ def load_to_postgresql(**kwargs):
     logging.info(f"Chargement terminé : {count_total:,} lignes insérées dans {pg_table}.")
 
 
+
+    # ---------------- ORDONNANCE_SORTIE ----------------
+    _load_jsonl_to_table(
+        pg_conn=pg_conn,
+        pg_cur=pg_cur,
+        jsonl_path="/tmp/etl_iris/ordonnance_sortie.jsonl",
+        target_table="oeci.ordonnance_sortie",
+    )
 
     #----------------RDV--------------
     logging.info(" Début du chargement de oeci.rdv depuis osiris.rdv...")
