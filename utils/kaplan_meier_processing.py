@@ -195,7 +195,17 @@ def calculate_kaplan_meier_task(ti, **kwargs):
     curve_df.columns = ["time_years", "survival_rate", "ic_lower", "ic_upper"]
 
     key_indicators = []
+    max_followup_years = float(df_patient["time_years"].max())
     for t in [1, 5, 10]:
+        # Do not extrapolate beyond observed follow-up horizon.
+        if t > max_followup_years:
+            key_indicators.append({
+                "time_point": t,
+                "survival_rate": None,
+                "ic_low_pct": None,
+                "ic_high_pct": None,
+            })
+            continue
         try:
             surv = float(kmf.survival_function_at_times(t).iloc[0]) * 100
             ci = kmf.confidence_interval_survival_function_.loc[:t].iloc[-1] * 100
@@ -206,7 +216,12 @@ def calculate_kaplan_meier_task(ti, **kwargs):
                 "ic_high_pct": round(float(ci.iloc[1]), 2),
             })
         except Exception:
-            pass
+            key_indicators.append({
+                "time_point": t,
+                "survival_rate": None,
+                "ic_low_pct": None,
+                "ic_high_pct": None,
+            })
 
     for kpi in key_indicators:
         kpi.update(final_patient_counts)
