@@ -8,6 +8,7 @@ from io import StringIO
 import numpy as np
 from lifelines import KaplanMeierFitter
 from sqlalchemy import text
+import unicodedata
 
 # ==============================================================================
 # Utils DB
@@ -17,6 +18,40 @@ def get_postgres_hook(conn_id=None):
     if not conn_id:
         conn_id = Variable.get("target_pg_conn_id", default_var="postgres_test")
     return PostgresHook(postgres_conn_id=conn_id)
+
+
+def _normalize_status(value):
+    if pd.isna(value):
+        return ""
+    normalized = unicodedata.normalize("NFKD", str(value))
+    normalized = normalized.encode("ascii", "ignore").decode("ascii")
+    return " ".join(normalized.strip().lower().split())
+
+
+def _compute_final_patient_counts(df_patient, end_obs):
+    if df_patient.empty:
+        return {
+            "nb_decedes_fin_courbe": 0,
+            "nb_vivants_fin_courbe": 0,
+            "nb_pdv_fin_courbe": 0,
+        }
+
+    curve_end = end_obs if pd.notna(end_obs) else df_patient["date_end_followup"].max()
+    is_deceased = df_patient["event_observed"] == 1
+
+    if pd.notna(curve_end):
+        is_followed_until_end = df_patient["date_end_followup"] >= curve_end
+    else:
+        is_followed_until_end = pd.Series(False, index=df_patient.index)
+
+    is_alive = (~is_deceased) & is_followed_until_end & (~df_patient["is_pdv_status"])
+    is_pdv = (~is_deceased) & (~is_alive)
+
+    return {
+        "nb_decedes_fin_courbe": int(is_deceased.sum()),
+        "nb_vivants_fin_courbe": int(is_alive.sum()),
+        "nb_pdv_fin_courbe": int(is_pdv.sum()),
+    }
 
 # ==============================================================================
 # 1. Extraction & nettoyage
@@ -101,15 +136,27 @@ def calculate_kaplan_meier_task(ti, **kwargs):
         date_end_followup=("date_end_followup", "max"),
     ).join(statut_last[["statut_vital", "date_derniere_nouvelle"]], how="left").reset_index()
 
+    df_patient["statut_vital_norm"] = df_patient["statut_vital"].apply(_normalize_status)
+    df_patient["is_deceased_status"] = df_patient["statut_vital_norm"].str.contains(
+        r"\bdecede\b|\bdeces\b",
+        regex=True,
+        na=False,
+    )
+    df_patient["is_pdv_status"] = df_patient["statut_vital_norm"].str.contains(
+        r"\bpdv\b|perdu de vue|perdue de vue|lost to follow up|lost to follow-up",
+        regex=True,
+        na=False,
+    )
+
     # Event dans la fenêtre : si Décédé ET décès (approché) <= fin_obs
     # (ici on suppose que "date_derniere_nouvelle" correspond à la date de décès quand statut=Décédé)
     if pd.notna(end_obs):
         df_patient["event_observed"] = np.where(
-            (df_patient["statut_vital"] == "Décédé") & (df_patient["date_derniere_nouvelle"] <= end_obs),
+            df_patient["is_deceased_status"] & (df_patient["date_derniere_nouvelle"] <= end_obs),
             1, 0
         )
     else:
-        df_patient["event_observed"] = np.where(df_patient["statut_vital"] == "Décédé", 1, 0)
+        df_patient["event_observed"] = np.where(df_patient["is_deceased_status"], 1, 0)
 
     # Temps
     df_patient["time_years"] = (
@@ -119,6 +166,14 @@ def calculate_kaplan_meier_task(ti, **kwargs):
 
     if df_patient.empty:
         raise ValueError("Après nettoyage, aucune ligne exploitable pour Kaplan-Meier.")
+
+    final_patient_counts = _compute_final_patient_counts(df_patient, end_obs)
+    print(
+        "Compteurs fin de courbe - decedes: "
+        f"{final_patient_counts['nb_decedes_fin_courbe']}, "
+        f"vivants: {final_patient_counts['nb_vivants_fin_courbe']}, "
+        f"pdv: {final_patient_counts['nb_pdv_fin_courbe']}"
+    )
 
     kmf = KaplanMeierFitter()
     kmf.fit(df_patient["time_years"], event_observed=df_patient["event_observed"])
@@ -144,9 +199,13 @@ def calculate_kaplan_meier_task(ti, **kwargs):
         except Exception:
             pass
 
+    for kpi in key_indicators:
+        kpi.update(final_patient_counts)
+
     return {
         "curve_data": curve_df.to_json(orient="records"),
         "key_indicators": key_indicators,
+        "final_patient_counts": final_patient_counts,
     }
 
 
@@ -239,6 +298,37 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
                 if not kpi_df.empty:
                     kpi_df = kpi_df.replace({np.nan: None})
 
+                cur.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = %s
+                      AND table_name = %s
+                    """,
+                    (schema, table_name),
+                )
+                available_cols = {row[0] for row in cur.fetchall()}
+                count_cols = [
+                    "nb_decedes_fin_courbe",
+                    "nb_vivants_fin_courbe",
+                    "nb_pdv_fin_courbe",
+                ]
+                can_store_counts = all(col in available_cols for col in count_cols)
+                missing_count_cols = [col for col in count_cols if col not in available_cols]
+
+                if can_store_counts:
+                    print(f"✅ Colonnes compteurs disponibles dans {full_table}: {', '.join(count_cols)}")
+                else:
+                    print(
+                        f"⚠️ Colonnes compteurs absentes dans {full_table}: {', '.join(missing_count_cols)}. "
+                        "Les valeurs restent disponibles via logs/XCom."
+                    )
+
+                final_counts = results.get("final_patient_counts", {})
+
+                def _to_str_or_none(value):
+                    return str(value) if value is not None else None
+
                 insert_cols = [
                     "time_point",
                     "survival_rate",
@@ -247,17 +337,26 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
                     "ic_high_pct",
                     "organe",
                 ]
+                if can_store_counts:
+                    insert_cols.extend(count_cols)
 
                 rows = []
                 for r in kpi_df.itertuples(index=False):
-                    rows.append((
+                    row = [
                         int(r.time_point) if r.time_point is not None else None,
                         r.survival_rate,
                         getattr(r, "ic_range", None),
                         getattr(r, "ic_low_pct", None),
                         getattr(r, "ic_high_pct", None),
                         organe,
-                    ))
+                    ]
+                    if can_store_counts:
+                        row.extend([
+                            _to_str_or_none(final_counts.get("nb_decedes_fin_courbe")),
+                            _to_str_or_none(final_counts.get("nb_vivants_fin_courbe")),
+                            _to_str_or_none(final_counts.get("nb_pdv_fin_courbe")),
+                        ])
+                    rows.append(tuple(row))
 
                 insert_sql = f"""
                     INSERT INTO {full_table} ({", ".join(insert_cols)})
