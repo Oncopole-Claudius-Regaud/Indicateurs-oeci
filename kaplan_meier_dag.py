@@ -62,6 +62,7 @@ with DAG(
             task_id=f'calculate_kaplan_meier_{organe_slug}',
             python_callable=calculate_kaplan_meier_task,
             op_kwargs={
+                'date_debut_obs': DATE_DEBUT_OBS_PARAM,
                 'date_fin_obs': DATE_FIN_OBS_PARAM
             },
         )

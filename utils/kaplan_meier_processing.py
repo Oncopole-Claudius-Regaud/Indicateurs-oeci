@@ -28,7 +28,16 @@ def _normalize_status(value):
     return " ".join(normalized.strip().lower().split())
 
 
-def _compute_final_patient_counts(df_patient, end_obs):
+def _death_in_observation_window_mask(df_patient, start_obs, end_obs):
+    death_mask = df_patient["is_deceased_status"]
+    if pd.notna(start_obs):
+        death_mask = death_mask & (df_patient["date_derniere_nouvelle"] >= start_obs)
+    if pd.notna(end_obs):
+        death_mask = death_mask & (df_patient["date_derniere_nouvelle"] <= end_obs)
+    return death_mask.fillna(False)
+
+
+def _compute_final_patient_counts(df_patient, start_obs, end_obs):
     if df_patient.empty:
         return {
             "nb_decedes_fin_courbe": 0,
@@ -36,16 +45,14 @@ def _compute_final_patient_counts(df_patient, end_obs):
             "nb_pdv_fin_courbe": 0,
         }
 
-    curve_end = end_obs if pd.notna(end_obs) else df_patient["date_end_followup"].max()
-    is_deceased = df_patient["event_observed"] == 1
+    is_deceased = _death_in_observation_window_mask(df_patient, start_obs, end_obs)
 
-    if pd.notna(curve_end):
-        is_followed_until_end = df_patient["date_end_followup"] >= curve_end
+    if pd.notna(end_obs):
+        is_alive = (~is_deceased) & (df_patient["date_derniere_nouvelle"] > end_obs)
+        is_pdv = (~is_deceased) & (~is_alive)
     else:
-        is_followed_until_end = pd.Series(False, index=df_patient.index)
-
-    is_alive = (~is_deceased) & is_followed_until_end & (~df_patient["is_pdv_status"])
-    is_pdv = (~is_deceased) & (~is_alive)
+        is_pdv = (~is_deceased) & df_patient["is_pdv_status"]
+        is_alive = (~is_deceased) & (~is_pdv)
 
     return {
         "nb_decedes_fin_courbe": int(is_deceased.sum()),
@@ -103,6 +110,7 @@ def calculate_kaplan_meier_task(ti, **kwargs):
 
     df = pd.read_json(StringIO(df_json))
 
+    start_obs = pd.to_datetime(kwargs.get("date_debut_obs"), errors="coerce")
     end_obs = pd.to_datetime(kwargs.get("date_fin_obs"), errors="coerce")
 
     # Dates (dayfirst=True utile si dcc est au format 29/08/2023)
@@ -148,15 +156,10 @@ def calculate_kaplan_meier_task(ti, **kwargs):
         na=False,
     )
 
-    # Event dans la fenêtre : si Décédé ET décès (approché) <= fin_obs
-    # (ici on suppose que "date_derniere_nouvelle" correspond à la date de décès quand statut=Décédé)
-    if pd.notna(end_obs):
-        df_patient["event_observed"] = np.where(
-            df_patient["is_deceased_status"] & (df_patient["date_derniere_nouvelle"] <= end_obs),
-            1, 0
-        )
-    else:
-        df_patient["event_observed"] = np.where(df_patient["is_deceased_status"], 1, 0)
+    # Event dans la fenêtre d'observation [date_debut_obs, date_fin_obs]
+    # (date_derniere_nouvelle est utilisée comme date de décès quand statut=Décédé)
+    death_in_window = _death_in_observation_window_mask(df_patient, start_obs, end_obs)
+    df_patient["event_observed"] = np.where(death_in_window, 1, 0)
 
     # Temps
     df_patient["time_years"] = (
@@ -167,12 +170,18 @@ def calculate_kaplan_meier_task(ti, **kwargs):
     if df_patient.empty:
         raise ValueError("Après nettoyage, aucune ligne exploitable pour Kaplan-Meier.")
 
-    final_patient_counts = _compute_final_patient_counts(df_patient, end_obs)
+    final_patient_counts = _compute_final_patient_counts(df_patient, start_obs, end_obs)
+    total_fin_courbe = (
+        final_patient_counts["nb_decedes_fin_courbe"]
+        + final_patient_counts["nb_vivants_fin_courbe"]
+        + final_patient_counts["nb_pdv_fin_courbe"]
+    )
     print(
         "Compteurs fin de courbe - decedes: "
         f"{final_patient_counts['nb_decedes_fin_courbe']}, "
         f"vivants: {final_patient_counts['nb_vivants_fin_courbe']}, "
-        f"pdv: {final_patient_counts['nb_pdv_fin_courbe']}"
+        f"pdv: {final_patient_counts['nb_pdv_fin_courbe']}, "
+        f"total: {total_fin_courbe}"
     )
 
     kmf = KaplanMeierFitter()
