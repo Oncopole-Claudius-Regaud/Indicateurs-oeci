@@ -42,7 +42,7 @@ with DAG(
 ) as dag:
 
     DATE_DEBUT_OBS_PARAM = "{{ dag_run.conf.get('date_debut_obs', '2020') }}"
-    DATE_FIN_OBS_PARAM = "{{ dag_run.conf.get('date_fin_obs', macros.datetime.now().strftime('%Y-%m-%d')) }}"
+    DATE_FIN_OBS_PARAM = "{{ dag_run.conf.get('date_fin_obs', (macros.datetime.now().year - 1) ~ '-12-31') }}"
 
     for organe, organe_slug in ORGANE_CONFIG.items():
 
