@@ -8,34 +8,84 @@ on:
 jobs:
   deploy:
     runs-on: self-hosted
+
     steps:
-      - name: Checkout repository (FULL history)
+      - name: Checkout repository (full history)
         uses: actions/checkout@v4
         with:
           ref: dynamique_organe
           fetch-depth: 0
           fetch-tags: false
 
-      - name: Deploy (fresh clone from workspace, clean)
+      - name: Deploy only to Indicateurs-oeci (safe mode)
         shell: bash
         run: |
           set -euo pipefail
 
           TARGET="$HOME/airflow/dags/Indicateurs-oeci"
+          EXPECTED_TARGET="$HOME/airflow/dags/Indicateurs-oeci"
+          PARENT_DIR="$HOME/airflow/dags"
           BRANCH="${GITHUB_REF_NAME}"
+          SOURCE_REPO="$GITHUB_WORKSPACE"
+          TEMP_REMOTE="deploy_src"
 
-          # Sanity: confirmer que le workspace n'est pas shallow
-          git -C "$GITHUB_WORKSPACE" rev-parse --is-shallow-repository
+          echo "TARGET=$TARGET"
+          echo "BRANCH=$BRANCH"
+          echo "SOURCE_REPO=$SOURCE_REPO"
 
-          # Repartir propre pour éviter un .git incomplet/corrompu
-          rm -rf "$TARGET"
-          mkdir -p "$(dirname "$TARGET")"
+          # Garde-fous : on refuse tout chemin inattendu
+          [ "$TARGET" = "$EXPECTED_TARGET" ] || { echo "Erreur: TARGET inattendu"; exit 1; }
+          [ -n "$TARGET" ] || { echo "Erreur: TARGET vide"; exit 1; }
+          [ "$TARGET" != "$HOME" ] || { echo "Erreur: TARGET pointe vers HOME"; exit 1; }
+          [ "$TARGET" != "$HOME/airflow" ] || { echo "Erreur: TARGET pointe vers airflow"; exit 1; }
+          [ "$TARGET" != "$HOME/airflow/dags" ] || { echo "Erreur: TARGET pointe vers dags"; exit 1; }
 
-          # --no-local évite les hardlinks / effets bizarres entre repos locaux
-          git clone --no-local --branch "$BRANCH" "$GITHUB_WORKSPACE" "$TARGET"
+          mkdir -p "$PARENT_DIR"
 
-          # (Optionnel mais utile) nettoyage
-          git -C "$TARGET" reset --hard
+          # Refuser un lien symbolique pour éviter toute surprise
+          if [ -L "$TARGET" ]; then
+            echo "Erreur: $TARGET est un lien symbolique, déploiement annulé."
+            exit 1
+          fi
+
+          # Si la cible n'existe pas encore : initialisation propre
+          if [ ! -e "$TARGET" ]; then
+            git clone --no-local "$SOURCE_REPO" "$TARGET"
+          fi
+
+          # Si la cible existe, elle doit être un vrai dépôt Git
+          if [ ! -d "$TARGET" ]; then
+            echo "Erreur: $TARGET existe mais n'est pas un dossier."
+            exit 1
+          fi
+
+          if [ ! -d "$TARGET/.git" ]; then
+            echo "Erreur: $TARGET existe mais n'est pas un dépôt Git."
+            echo "Par sécurité, rien n'a été supprimé."
+            exit 1
+          fi
+
+          # Ajouter/mettre à jour une remote locale temporaire pointant vers le workspace GitHub Actions
+          if git -C "$TARGET" remote get-url "$TEMP_REMOTE" >/dev/null 2>&1; then
+            git -C "$TARGET" remote set-url "$TEMP_REMOTE" "$SOURCE_REPO"
+          else
+            git -C "$TARGET" remote add "$TEMP_REMOTE" "$SOURCE_REPO"
+          fi
+
+          # Récupérer les branches depuis le workspace sans toucher aux autres repos sous dags
+          git -C "$TARGET" fetch --prune "$TEMP_REMOTE" "+refs/heads/*:refs/remotes/$TEMP_REMOTE/*"
+
+          # Vérifier que la branche attendue existe bien
+          git -C "$TARGET" show-ref --verify --quiet "refs/remotes/$TEMP_REMOTE/$BRANCH" || {
+            echo "Erreur: branche $BRANCH introuvable dans la source $SOURCE_REPO"
+            exit 1
+          }
+
+          # Positionner uniquement le repo cible sur la branche à déployer
+          git -C "$TARGET" checkout -B "$BRANCH" "$TEMP_REMOTE/$BRANCH"
+          git -C "$TARGET" reset --hard "$TEMP_REMOTE/$BRANCH"
           git -C "$TARGET" clean -fd
 
-          git -C "$TARGET" status
+          echo "Etat final du repo déployé :"
+          git -C "$TARGET" status --short --branch
+          git -C "$TARGET" rev-parse HEAD
