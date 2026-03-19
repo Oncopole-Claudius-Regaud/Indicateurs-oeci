@@ -31,8 +31,9 @@ INSEE_TXT_REPO_DIR = PROJECT_ROOT / "insee" / "download" / "data"
 INSEE_TXT_FILTER_REGEX = r"^insee_deces_latest\.txt$"
 INSEE_CSV_FILTER_REGEX = r"^insee_deces_latest\.csv$"
 INSEE_NDJSON_GLOB = "insee_deces_latest*.NDJSON"
-INSEE_HISTORICAL_TXT_FILTER_REGEX = r"^deces-[0-9]{4}(-m[0-9]{2})?\.txt$"
-INSEE_HISTORICAL_CSV_FILTER_REGEX = r"^deces-[0-9]{4}(-m[0-9]{2})?\.csv$"
+INSEE_HISTORICAL_START_YEAR = 2020
+INSEE_HISTORICAL_TXT_FILTER_REGEX = r"^deces-(202[0-9]|20[3-9][0-9])(-m[0-9]{2})?\.txt$"
+INSEE_HISTORICAL_CSV_FILTER_REGEX = r"^deces-(202[0-9]|20[3-9][0-9])(-m[0-9]{2})?\.csv$"
 # Set to "historical" for one full bootstrap, then switch back to "monthly".
 INSEE_RUN_MODE = "historical"
 
@@ -82,6 +83,8 @@ def _fetch_insee_txt_resources() -> list[dict[str, Any]]:
             continue
 
         year = int(match.group(1))
+        if year < INSEE_HISTORICAL_START_YEAR:
+            continue
         month = int(match.group(2)) if match.group(2) else 0
         rank = (year, month)
         filename = f"deces-{year:04d}{f'-m{month:02d}' if month else ''}.txt"
