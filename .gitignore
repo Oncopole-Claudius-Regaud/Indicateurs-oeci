@@ -1,17 +1,23 @@
-#python
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
-# Virtualenv
+# Environnements
+.env
+.venv/
 venv/
-.env/
 
-# Airflow
+# Airflow / runtime
 airflow.db
-airflow.cfg
 logs/
+insee_month_rattrapage/
 
 # IDE
 .vscode/
 .idea/
 
+# OS
+.DS_Store
+Thumbs.db
