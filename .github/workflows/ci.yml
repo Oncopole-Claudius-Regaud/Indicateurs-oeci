@@ -13,7 +13,7 @@ jobs:
       - name: Checkout repository (full history)
         uses: actions/checkout@v4
         with:
-          ref: dynamique_organe
+          ref: insee_machine_learning
           fetch-depth: 0
           fetch-tags: false
 
