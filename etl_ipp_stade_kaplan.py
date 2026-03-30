@@ -77,7 +77,7 @@ with DAG(
         task_id="push_pdf_to_remote_server",
         python_callable=push_pdf_task,
         op_kwargs={
-            "local_dir": "/opt/push_pdf_llm",
+            "local_dir": "/opt/push_pdf_llm.py",
             "remote_host": "10.210.22.130",
             "remote_port": 22,
             "remote_user": "administrateur",
