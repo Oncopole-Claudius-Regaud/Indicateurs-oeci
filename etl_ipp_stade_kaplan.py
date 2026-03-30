@@ -77,12 +77,17 @@ with DAG(
         task_id="push_pdf_to_remote_server",
         python_callable=push_pdf_task,
         op_kwargs={
-            "local_dir": "/opt/push_pdf_llm.py",
-            "remote_host": "10.210.22.130",
+            "remote_host": "srvlakehouse",
             "remote_port": 22,
             "remote_user": "administrateur",
             "remote_dir": "/home/administrateur/pdf_llm",
             "ssh_password_var_key": "password_serverlakehouse",
+            "remote_script": "/opt/push_pdf_llm",
+            "source_dir": "/PDF",
+            "target_host": "10.210.22.130",
+            "target_port": 22,
+            "target_user": "administrateur",
+            "target_password_var_key": "password_clidatadsin",
         },
     )
 
@@ -101,7 +106,7 @@ with DAG(
                 "extract_tnm_stage_by_ipp.py"
             ),
             "remote_data_dir": "/home/administrateur/pdf_llm",
-            "ssh_password_var_key": "password_serverlakehouse",
+            "ssh_password_var_key": "password_clidatadsin",
         },
     )
 
@@ -117,7 +122,7 @@ with DAG(
             "remote_user": "administrateur",
             "remote_csv_path": "/home/administrateur/pdf_llm/ipp_stage_results.csv",
             "local_csv_path": "/tmp/ipp_stage_results.csv",
-            "ssh_password_var_key": "password_serverlakehouse",
+            "ssh_password_var_key": "password_clidatadsin",
         },
     )
 

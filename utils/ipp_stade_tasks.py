@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import io
+import json
 import logging
 import os
+import shlex
 import tempfile
-from io import StringIO
 from typing import Optional
 
 import pandas as pd
@@ -104,22 +104,28 @@ def extract_ipp_task(date_debut_obs: str, conn_id: str = "postgres_test", **kwar
 # ---------------------------------------------------------------------------
 
 def push_pdf_task(
-    local_dir: str,
     remote_host: str,
     remote_port: int,
     remote_user: str,
     remote_dir: str,
     ssh_password_var_key: str,
+    remote_script: str = "/opt/push_pdf_llm",
+    source_dir: str = "/PDF",
+    target_host: str = "10.210.22.130",
+    target_port: int = 22,
+    target_user: str = "administrateur",
+    target_password_var_key: str = "password_clidatadsin",
+    remote_python_bin: str = "python3",
+    remote_tmp_dir: str = "/tmp",
     **kwargs,
 ) -> None:
     """
-    Scanne local_dir pour les paires *.json.txt + *.pdf dont l'IPP figure
-    dans la liste XCom, puis les envoie vers remote_dir via SFTP.
-    """
-    import json
-    import unicodedata
-    from pathlib import Path
+    Lance sur le lakehouse le script /opt/push_pdf_llm.
 
+    Le script distant lit la liste d'IPP produite par la task précédente,
+    scanne les PDF/JSON sur le lakehouse, puis envoie les fichiers sur la
+    machine cible via SFTP.
+    """
     ti = kwargs["ti"]
     ipp_list: list[str] = ti.xcom_pull(
         task_ids="extract_ipp_from_statut_vital", key="ipp_list"
@@ -128,70 +134,92 @@ def push_pdf_task(
         logger.warning("Aucun IPP reçu en XCom – rien à envoyer.")
         return
 
-    target_ipps = set(ipp_list)
-    local_path = Path(local_dir)
+    logger.info("IPP reçus depuis XCom : %d", len(ipp_list))
 
-    if not local_path.exists():
-        raise FileNotFoundError(f"Répertoire local introuvable : {local_dir}")
-
-    def parse_ipp_from_json(json_path: Path) -> Optional[str]:
-        try:
-            raw = json_path.read_text(encoding="utf-8", errors="replace").strip()
-            if not raw:
-                return None
-            data = json.loads(raw)
-            ipp = (data.get("Patient") or {}).get("IPP")
-            return str(ipp).strip() if ipp is not None else None
-        except Exception as exc:
-            logger.debug("Impossible de lire %s : %s", json_path.name, exc)
-            return None
-
-    # Collecte des paires éligibles
-    to_upload: list[tuple[Path, Path]] = []
-    for json_file in sorted(local_path.glob("*.json.txt")):
-        ipp = parse_ipp_from_json(json_file)
-        if not ipp or ipp not in target_ipps:
-            continue
-        pdf_file = Path(str(json_file)[: -len(".json.txt")] + ".pdf")
-        if not pdf_file.exists():
-            logger.warning("PDF manquant pour IPP=%s (%s)", ipp, pdf_file.name)
-            continue
-        to_upload.append((json_file, pdf_file))
-
-    logger.info("Paires éligibles à envoyer : %d", len(to_upload))
-    if not to_upload:
-        return
-
+    target_password = Variable.get(target_password_var_key)
     client = _get_ssh_client(remote_host, remote_port, remote_user, ssh_password_var_key)
-    try:
-        sftp = client.open_sftp()
-        try:
-            # Crée le répertoire distant si nécessaire
-            try:
-                sftp.stat(remote_dir)
-            except FileNotFoundError:
-                sftp.mkdir(remote_dir)
 
-            ok = ko = 0
-            for json_file, pdf_file in to_upload:
-                try:
-                    remote_json = remote_dir.rstrip("/") + "/" + json_file.name
-                    remote_pdf  = remote_dir.rstrip("/") + "/" + pdf_file.name
-                    sftp.put(str(json_file), remote_json)
-                    sftp.put(str(pdf_file),  remote_pdf)
-                    ok += 1
-                    logger.info("Envoyé : %s + %s", json_file.name, pdf_file.name)
-                except Exception as exc:
-                    ko += 1
-                    logger.error("Échec upload %s : %s", json_file.name, exc)
-        finally:
-            sftp.close()
+    local_ipp_file: Optional[str] = None
+    remote_ipp_file: Optional[str] = None
+    sftp = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".json",
+            prefix="ipp_list_",
+            delete=False,
+            encoding="utf-8",
+        ) as tmp:
+            json.dump({"ipp_list": ipp_list}, tmp, ensure_ascii=False)
+            local_ipp_file = tmp.name
+
+        remote_ipp_file = (
+            f"{remote_tmp_dir.rstrip('/')}/"
+            f"{os.path.basename(local_ipp_file)}"
+        )
+
+        sftp = client.open_sftp()
+        sftp.put(local_ipp_file, remote_ipp_file)
+        logger.info("Liste IPP copiée sur %s:%s", remote_host, remote_ipp_file)
+
+        cmd = " ".join(
+            [
+                f"REMOTE_TARGET_PASSWORD={shlex.quote(target_password)}",
+                shlex.quote(remote_python_bin),
+                shlex.quote(remote_script),
+                "--ipp-file",
+                shlex.quote(remote_ipp_file),
+                "--local-dir",
+                shlex.quote(source_dir),
+                "--remote-host",
+                shlex.quote(target_host),
+                "--remote-port",
+                shlex.quote(str(target_port)),
+                "--remote-user",
+                shlex.quote(target_user),
+                "--remote-dir",
+                shlex.quote(remote_dir),
+                "--remote-password-env",
+                "REMOTE_TARGET_PASSWORD",
+                "--verbose",
+            ]
+        )
+
+        logger.info(
+            "Commande distante sur %s : %s %s --ipp-file %s ...",
+            remote_host,
+            remote_python_bin,
+            remote_script,
+            remote_ipp_file,
+        )
+        _, stdout, stderr = client.exec_command(cmd, timeout=3600)
+        exit_status = stdout.channel.recv_exit_status()
+        stdout_txt = stdout.read().decode("utf-8", errors="replace")
+        stderr_txt = stderr.read().decode("utf-8", errors="replace")
+
+        if stdout_txt:
+            logger.info("STDOUT push_pdf:\n%s", stdout_txt)
+        if stderr_txt:
+            logger.warning("STDERR push_pdf:\n%s", stderr_txt)
+
+        if exit_status != 0:
+            raise RuntimeError(
+                f"Le script distant {remote_script} a terminé avec le code {exit_status}. "
+                f"Stderr: {stderr_txt[:500]}"
+            )
     finally:
+        if sftp is not None:
+            if remote_ipp_file:
+                try:
+                    sftp.remove(remote_ipp_file)
+                except Exception:
+                    pass
+            sftp.close()
+        if local_ipp_file and os.path.exists(local_ipp_file):
+            os.unlink(local_ipp_file)
         client.close()
 
-    logger.info("Upload terminé – OK:%d  KO:%d", ok, ko)
-    if ko:
-        raise RuntimeError(f"{ko} fichier(s) n'ont pas pu être envoyés.")
+    logger.info("Push PDF distant terminé avec succès.")
 
 
 # ---------------------------------------------------------------------------
