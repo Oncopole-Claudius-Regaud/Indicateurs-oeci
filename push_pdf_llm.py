@@ -54,7 +54,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--local-dir",
-        default="/PDF",
+        default="/opt/PDF",
         help="Repertoire local contenant les fichiers *.json.txt et *.pdf",
     )
     parser.add_argument(
