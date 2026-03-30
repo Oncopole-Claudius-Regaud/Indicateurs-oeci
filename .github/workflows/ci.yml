@@ -3,7 +3,7 @@ name: Deploy Indicateurs OECI
 on:
   push:
     branches:
-      - dynamique_organe
+      - pipeline_stade_kaplan
 
 jobs:
   deploy:
@@ -13,7 +13,7 @@ jobs:
       - name: Checkout repository (full history)
         uses: actions/checkout@v4
         with:
-          ref: dynamique_organe
+          ref: pipeline_stade_kaplan
           fetch-depth: 0
           fetch-tags: false
 

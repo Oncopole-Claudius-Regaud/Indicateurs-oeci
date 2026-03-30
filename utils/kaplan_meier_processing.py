@@ -1,4 +1,6 @@
 # ==============================================================================
+# kaplan_meier_processing.py  (version mise à jour – ajout colonne "stade")
+# ==============================================================================
 
 import pandas as pd
 from airflow.providers.postgres.hooks.postgres import PostgresHook
@@ -7,7 +9,6 @@ from datetime import datetime
 from io import StringIO
 import numpy as np
 from lifelines import KaplanMeierFitter
-from sqlalchemy import text
 import unicodedata
 
 # ==============================================================================
@@ -65,24 +66,32 @@ def _compute_final_patient_counts(df_patient, start_obs, end_obs):
 # ==============================================================================
 
 def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=None):
+    """
+    Extrait les données de survie depuis v_statut_vital pour un organe donné.
+    Inclut désormais la colonne 'stade' (nullable) issue de la jointure avec ipp_stade.
+    Retourne un JSON (string) stocké en XCom.
+    """
     hook = get_postgres_hook(conn_id)
     FULL_TABLE_PATH = "datamart_oeci_survie.v_statut_vital"
 
     query = f"""
     SELECT
-        ipp_ocr,
-        code_cim,
-        organe,
-        date_diag_tkc,
-        date_diag_dcc,
-        date_derniere_nouvelle,
-        statut_vital
-    FROM {FULL_TABLE_PATH}
-    WHERE organe = '{organe}'
-      AND organe IS NOT NULL
-      AND code_cim IS NOT NULL
-      AND COALESCE(date_diag_tkc, date_diag_dcc) IS NOT NULL
-      AND EXTRACT(YEAR FROM COALESCE(date_diag_tkc, date_diag_dcc))::int
+        v.ipp_ocr,
+        v.code_cim,
+        v.organe,
+        v.date_diag_tkc,
+        v.date_diag_dcc,
+        v.date_derniere_nouvelle,
+        v.statut_vital,
+        s.stade
+    FROM {FULL_TABLE_PATH} v
+    LEFT JOIN datamart_oeci_survie.ipp_stade s
+        ON s.ipp = v.ipp_ocr
+    WHERE v.organe = '{organe}'
+      AND v.organe IS NOT NULL
+      AND v.code_cim IS NOT NULL
+      AND COALESCE(v.date_diag_tkc, v.date_diag_dcc) IS NOT NULL
+      AND EXTRACT(YEAR FROM COALESCE(v.date_diag_tkc, v.date_diag_dcc))::int
             = SUBSTRING('{date_debut_obs}' FROM 1 FOR 4)::int
     ;
     """
@@ -94,6 +103,7 @@ def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=No
         conn.close()
 
     df["ipp_ocr"] = df["ipp_ocr"].fillna("")
+    df["stade"] = df["stade"].fillna("") if "stade" in df.columns else ""
     return df.to_json(date_format="iso")
 
 
@@ -113,18 +123,13 @@ def calculate_kaplan_meier_task(ti, **kwargs):
     start_obs = pd.to_datetime(kwargs.get("date_debut_obs"), errors="coerce")
     end_obs = pd.to_datetime(kwargs.get("date_fin_obs"), errors="coerce")
 
-    # Dates (dayfirst=True utile si dcc est au format 29/08/2023)
     df["date_diag_tkc"] = pd.to_datetime(df.get("date_diag_tkc"), errors="coerce")
     df["date_diag_dcc"] = pd.to_datetime(df.get("date_diag_dcc"), errors="coerce", dayfirst=True)
     df["date_derniere_nouvelle"] = pd.to_datetime(df.get("date_derniere_nouvelle"), errors="coerce")
-
-    # Date diag ref : TKC sinon DCC
     df["date_diag_ref"] = df["date_diag_tkc"].fillna(df["date_diag_dcc"])
 
-    # Garder exploitable
     df = df[df["date_diag_ref"].notna() & df["date_derniere_nouvelle"].notna()].copy()
 
-    # Censure à date_fin_obs : fin de suivi = min(dernière nouvelle, fin obs)
     if pd.notna(end_obs):
         df["date_end_followup"] = df["date_derniere_nouvelle"].where(
             df["date_derniere_nouvelle"] <= end_obs, end_obs
@@ -132,36 +137,37 @@ def calculate_kaplan_meier_task(ti, **kwargs):
     else:
         df["date_end_followup"] = df["date_derniere_nouvelle"]
 
-    # 1 ligne par IPP :
-    # - diag = min
-    # - fin suivi = max (après censure)
-    # - statut_final = statut de la ligne avec dernière_nouvelle max (avant censure)
     idx_last = df.groupby("ipp_ocr")["date_derniere_nouvelle"].idxmax()
     statut_last = df.loc[idx_last, ["ipp_ocr", "statut_vital", "date_derniere_nouvelle"]].set_index("ipp_ocr")
+
+    # Récupère le stade par IPP (prend le premier non-vide)
+    stade_by_ipp = (
+        df[df["stade"].notna() & (df["stade"] != "")]
+        .drop_duplicates("ipp_ocr")
+        .set_index("ipp_ocr")["stade"]
+    ) if "stade" in df.columns else pd.Series(dtype=str)
 
     df_patient = df.groupby("ipp_ocr").agg(
         date_diag_ref=("date_diag_ref", "min"),
         date_end_followup=("date_end_followup", "max"),
     ).join(statut_last[["statut_vital", "date_derniere_nouvelle"]], how="left").reset_index()
 
+    # Rattache le stade
+    df_patient = df_patient.join(stade_by_ipp.rename("stade"), on="ipp_ocr", how="left")
+    df_patient["stade"] = df_patient["stade"].fillna("")
+
     df_patient["statut_vital_norm"] = df_patient["statut_vital"].apply(_normalize_status)
     df_patient["is_deceased_status"] = df_patient["statut_vital_norm"].str.contains(
-        r"\bdecede\b|\bdeces\b",
-        regex=True,
-        na=False,
+        r"\bdecede\b|\bdeces\b", regex=True, na=False,
     )
     df_patient["is_pdv_status"] = df_patient["statut_vital_norm"].str.contains(
         r"\bpdv\b|perdu de vue|perdue de vue|lost to follow up|lost to follow-up",
-        regex=True,
-        na=False,
+        regex=True, na=False,
     )
 
-    # Event dans la fenêtre d'observation [date_debut_obs, date_fin_obs]
-    # (date_derniere_nouvelle est utilisée comme date de décès quand statut=Décédé)
     death_in_window = _death_in_observation_window_mask(df_patient, start_obs, end_obs)
     df_patient["event_observed"] = np.where(death_in_window, 1, 0)
 
-    # Temps
     df_patient["time_years"] = (
         (df_patient["date_end_followup"] - df_patient["date_diag_ref"]).dt.days / 365.25
     )
@@ -171,18 +177,17 @@ def calculate_kaplan_meier_task(ti, **kwargs):
         raise ValueError("Après nettoyage, aucune ligne exploitable pour Kaplan-Meier.")
 
     final_patient_counts = _compute_final_patient_counts(df_patient, start_obs, end_obs)
-    total_fin_courbe = (
-        final_patient_counts["nb_decedes_fin_courbe"]
-        + final_patient_counts["nb_vivants_fin_courbe"]
-        + final_patient_counts["nb_pdv_fin_courbe"]
-    )
+    total_fin_courbe = sum(final_patient_counts.values())
     print(
-        "Compteurs fin de courbe - decedes: "
-        f"{final_patient_counts['nb_decedes_fin_courbe']}, "
+        f"Compteurs fin de courbe – decedes: {final_patient_counts['nb_decedes_fin_courbe']}, "
         f"vivants: {final_patient_counts['nb_vivants_fin_courbe']}, "
         f"pdv: {final_patient_counts['nb_pdv_fin_courbe']}, "
         f"total: {total_fin_courbe}"
     )
+
+    # Distribution des stades pour info
+    stade_dist = df_patient["stade"].value_counts().to_dict()
+    print(f"Distribution des stades : {stade_dist}")
 
     kmf = KaplanMeierFitter()
     kmf.fit(df_patient["time_years"], event_observed=df_patient["event_observed"])
@@ -197,7 +202,6 @@ def calculate_kaplan_meier_task(ti, **kwargs):
     key_indicators = []
     max_followup_years = float(df_patient["time_years"].max())
     for t in [1, 5, 10]:
-        # Do not extrapolate beyond observed follow-up horizon.
         if t > max_followup_years:
             key_indicators.append({
                 "time_point": t,
@@ -226,23 +230,29 @@ def calculate_kaplan_meier_task(ti, **kwargs):
     for kpi in key_indicators:
         kpi.update(final_patient_counts)
 
+    # Stade majoritaire de la cohorte (pour alimenter la colonne stade des tables KM)
+    stade_majoritaire = (
+        df_patient[df_patient["stade"] != ""]["stade"].mode().iloc[0]
+        if not df_patient[df_patient["stade"] != ""].empty
+        else None
+    )
+
     return {
         "curve_data": curve_df.to_json(orient="records"),
         "key_indicators": key_indicators,
         "final_patient_counts": final_patient_counts,
+        "stade_majoritaire": stade_majoritaire,
     }
 
 
 # ==============================================================================
-# 3. Chargement en base
+# 3. Chargement en base (avec colonne stade)
 # ==============================================================================
 
 def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
     """
-    Charge les résultats Kaplan-Meier dans PostgreSQL en psycopg2 pur (execute_values).
-    - TRUNCATE la table cible
-    - INSERT bulk
-    - Respecte les colonnes du DDL (IDs et run_date en DEFAULT)
+    Charge les résultats Kaplan-Meier dans PostgreSQL.
+    Gère désormais la colonne 'stade' si elle est présente dans la table cible.
     """
     from psycopg2.extras import execute_values
 
@@ -258,7 +268,6 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
     schema = "datamart_oeci_survie"
     full_table = f"{schema}.{table_name}"
 
-    # ⚠️ organe et dates obs viennent du DAG via op_kwargs
     organe = kwargs.get("organe")
     if not organe:
         raise ValueError("Paramètre 'organe' manquant dans op_kwargs (DAG).")
@@ -266,87 +275,82 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
     date_debut_obs = kwargs.get("date_debut_obs")
     date_fin_obs = kwargs.get("date_fin_obs")
 
-    # ✅ Correction: tes colonnes sont varchar(4) -> on stocke l'année uniquement
     date_start_obs_year = str(date_debut_obs)[:4] if date_debut_obs is not None else None
     date_end_obs_year = str(date_fin_obs)[:4] if date_fin_obs is not None else None
+
+    stade_majoritaire = results.get("stade_majoritaire")
 
     pg_conn = pg_hook.get_conn()
     try:
         with pg_conn.cursor() as cur:
-            # 1) TRUNCATE
+            # Colonnes disponibles dans la table cible
+            cur.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = %s AND table_name = %s
+                """,
+                (schema, table_name),
+            )
+            available_cols = {row[0] for row in cur.fetchall()}
+            has_stade_col = "stade" in available_cols
+
+            if has_stade_col:
+                print(f"✅ Colonne 'stade' détectée dans {full_table}")
+            else:
+                print(f"ℹ️ Colonne 'stade' absente de {full_table} – ignorée")
+
+            # TRUNCATE
             cur.execute(f"TRUNCATE TABLE {full_table};")
             print(f"🧹 Table vidée : {full_table}")
 
-            # 2) Préparer INSERT selon la table
+            # ---------------------------------------------------------------
+            # Courbe KM
+            # ---------------------------------------------------------------
             if table_name.startswith("datamart_km_curve"):
-                # DDL attend:
-                # time_years, survival_rate, ic_lower, ic_upper, organe, date_start_obs, date_end_obs
                 curve_df = pd.read_json(StringIO(results["curve_data"]))
                 curve_df = curve_df.replace({np.nan: None})
 
                 insert_cols = [
-                    "time_years",
-                    "survival_rate",
-                    "ic_lower",
-                    "ic_upper",
-                    "organe",
-                    "date_start_obs",
-                    "date_end_obs",
+                    "time_years", "survival_rate", "ic_lower", "ic_upper",
+                    "organe", "date_start_obs", "date_end_obs",
                 ]
+                if has_stade_col:
+                    insert_cols.append("stade")
 
                 rows = []
                 for r in curve_df.itertuples(index=False):
-                    rows.append((
-                        r.time_years,
-                        r.survival_rate,
-                        r.ic_lower,
-                        r.ic_upper,
-                        organe,
-                        date_start_obs_year,
-                        date_end_obs_year,
-                    ))
-
-                insert_sql = f"""
-                    INSERT INTO {full_table} ({", ".join(insert_cols)})
-                    VALUES %s
-                """
+                    row = [
+                        r.time_years, r.survival_rate, r.ic_lower, r.ic_upper,
+                        organe, date_start_obs_year, date_end_obs_year,
+                    ]
+                    if has_stade_col:
+                        row.append(stade_majoritaire)
+                    rows.append(tuple(row))
 
                 if rows:
-                    execute_values(cur, insert_sql, rows, page_size=1000)
+                    execute_values(
+                        cur,
+                        f"INSERT INTO {full_table} ({', '.join(insert_cols)}) VALUES %s",
+                        rows,
+                        page_size=1000,
+                    )
                 print(f"✅ Insert curve: {len(rows)} lignes → {full_table}")
 
+            # ---------------------------------------------------------------
+            # Indicateurs clés KM
+            # ---------------------------------------------------------------
             elif table_name.startswith("datamart_km_key_indicators"):
-                # DDL attend:
-                # time_point, survival_rate, ic_range, ic_low_pct, ic_high_pct, organe
                 kpi_df = pd.DataFrame(results["key_indicators"])
                 if not kpi_df.empty:
                     kpi_df = kpi_df.replace({np.nan: None})
 
-                cur.execute(
-                    """
-                    SELECT column_name
-                    FROM information_schema.columns
-                    WHERE table_schema = %s
-                      AND table_name = %s
-                    """,
-                    (schema, table_name),
-                )
-                available_cols = {row[0] for row in cur.fetchall()}
                 count_cols = [
                     "nb_decedes_fin_courbe",
                     "nb_vivants_fin_courbe",
                     "nb_pdv_fin_courbe",
                 ]
                 can_store_counts = all(col in available_cols for col in count_cols)
-                missing_count_cols = [col for col in count_cols if col not in available_cols]
-
-                if can_store_counts:
-                    print(f"✅ Colonnes compteurs disponibles dans {full_table}: {', '.join(count_cols)}")
-                else:
-                    print(
-                        f"⚠️ Colonnes compteurs absentes dans {full_table}: {', '.join(missing_count_cols)}. "
-                        "Les valeurs restent disponibles via logs/XCom."
-                    )
 
                 final_counts = results.get("final_patient_counts", {})
 
@@ -354,15 +358,13 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
                     return str(value) if value is not None else None
 
                 insert_cols = [
-                    "time_point",
-                    "survival_rate",
-                    "ic_range",
-                    "ic_low_pct",
-                    "ic_high_pct",
-                    "organe",
+                    "time_point", "survival_rate", "ic_range",
+                    "ic_low_pct", "ic_high_pct", "organe",
                 ]
                 if can_store_counts:
                     insert_cols.extend(count_cols)
+                if has_stade_col:
+                    insert_cols.append("stade")
 
                 rows = []
                 for r in kpi_df.itertuples(index=False):
@@ -380,15 +382,17 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
                             _to_str_or_none(final_counts.get("nb_vivants_fin_courbe")),
                             _to_str_or_none(final_counts.get("nb_pdv_fin_courbe")),
                         ])
+                    if has_stade_col:
+                        row.append(stade_majoritaire)
                     rows.append(tuple(row))
 
-                insert_sql = f"""
-                    INSERT INTO {full_table} ({", ".join(insert_cols)})
-                    VALUES %s
-                """
-
                 if rows:
-                    execute_values(cur, insert_sql, rows, page_size=1000)
+                    execute_values(
+                        cur,
+                        f"INSERT INTO {full_table} ({', '.join(insert_cols)}) VALUES %s",
+                        rows,
+                        page_size=1000,
+                    )
                 print(f"✅ Insert KPI: {len(rows)} lignes → {full_table}")
 
             else:
@@ -401,6 +405,3 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
         raise
     finally:
         pg_conn.close()
-
-
-
