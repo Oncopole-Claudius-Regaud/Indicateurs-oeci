@@ -110,7 +110,7 @@ def push_pdf_task(
     ssh_password_var_key: str,
     remote_script: str = "/opt/push_pdf_llm.py",
     source_dir: str = "/opt/PDF",
-    stage_dir: str = "/opt/pdf_llm_stage",
+    stage_dir: str = "/home/administrateur/pdf_llm_stage",
     link_mode: str = "symlink",
     remote_python_bin: str = "python3",
     remote_tmp_dir: str = "/tmp",
@@ -204,9 +204,10 @@ def push_pdf_task(
                 logger.warning("STDERR push_pdf (tail):\n%s", stderr_tail)
 
         if exit_status != 0:
+            error_excerpt = (stderr_txt or stdout_txt).strip()[:1000]
             raise RuntimeError(
                 f"Le script distant {remote_script} a terminé avec le code {exit_status}. "
-                f"Stderr: {stderr_txt[:500]}"
+                f"Détail: {error_excerpt}"
             )
     finally:
         if sftp is not None:
@@ -277,9 +278,10 @@ def run_tnm_extraction_task(
                 logger.warning("STDERR regex (tail):\n%s", stderr_tail)
 
         if exit_status != 0:
+            error_excerpt = (stderr_txt or stdout_txt).strip()[:1000]
             raise RuntimeError(
                 f"Le script TNM a terminé avec le code {exit_status}. "
-                f"Stderr: {stderr_txt[:500]}"
+                f"Détail: {error_excerpt}"
             )
         logger.info("Extraction TNM terminée avec succès.")
     finally:
