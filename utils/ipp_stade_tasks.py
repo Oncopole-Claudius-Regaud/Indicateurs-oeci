@@ -107,24 +107,23 @@ def push_pdf_task(
     remote_host: str,
     remote_port: int,
     remote_user: str,
-    remote_dir: str,
     ssh_password_var_key: str,
     remote_script: str = "/opt/push_pdf_llm.py",
     source_dir: str = "/opt/PDF",
-    target_host: str = "10.210.22.130",
-    target_port: int = 22,
-    target_user: str = "administrateur",
-    target_password_var_key: str = "password_clidatadsin",
+    stage_dir: str = "/opt/pdf_llm_stage",
+    link_mode: str = "symlink",
     remote_python_bin: str = "python3",
     remote_tmp_dir: str = "/tmp",
+    remote_progress_every: int = 200,
+    remote_command_timeout: Optional[int] = None,
     **kwargs,
 ) -> None:
     """
     Lance sur le lakehouse le script /opt/push_pdf_llm.
 
     Le script distant lit la liste d'IPP produite par la task précédente,
-    scanne les PDF/JSON sur le lakehouse, puis envoie les fichiers sur la
-    machine cible via SFTP.
+    scanne les PDF/JSON sur le lakehouse, puis materialise uniquement les
+    couples eligibles dans un dossier de staging local.
     """
     ti = kwargs["ti"]
     ipp_list: list[str] = ti.xcom_pull(
@@ -136,7 +135,6 @@ def push_pdf_task(
 
     logger.info("IPP reçus depuis XCom : %d", len(ipp_list))
 
-    target_password = Variable.get(target_password_var_key)
     client = _get_ssh_client(remote_host, remote_port, remote_user, ssh_password_var_key)
 
     local_ipp_file: Optional[str] = None
@@ -164,24 +162,19 @@ def push_pdf_task(
 
         cmd = " ".join(
             [
-                f"REMOTE_TARGET_PASSWORD={shlex.quote(target_password)}",
                 shlex.quote(remote_python_bin),
                 shlex.quote(remote_script),
                 "--ipp-file",
                 shlex.quote(remote_ipp_file),
                 "--local-dir",
                 shlex.quote(source_dir),
-                "--remote-host",
-                shlex.quote(target_host),
-                "--remote-port",
-                shlex.quote(str(target_port)),
-                "--remote-user",
-                shlex.quote(target_user),
-                "--remote-dir",
-                shlex.quote(remote_dir),
-                "--remote-password-env",
-                "REMOTE_TARGET_PASSWORD",
-                "--verbose",
+                "--stage-dir",
+                shlex.quote(stage_dir),
+                "--link-mode",
+                shlex.quote(link_mode),
+                "--clean-stage-dir",
+                "--progress-every",
+                shlex.quote(str(remote_progress_every)),
             ]
         )
 
@@ -192,15 +185,23 @@ def push_pdf_task(
             remote_script,
             remote_ipp_file,
         )
-        _, stdout, stderr = client.exec_command(cmd, timeout=3600)
-        exit_status = stdout.channel.recv_exit_status()
+        _, stdout, stderr = client.exec_command(
+            cmd,
+            timeout=remote_command_timeout,
+            get_pty=True,
+        )
         stdout_txt = stdout.read().decode("utf-8", errors="replace")
         stderr_txt = stderr.read().decode("utf-8", errors="replace")
+        exit_status = stdout.channel.recv_exit_status()
 
         if stdout_txt:
-            logger.info("STDOUT push_pdf:\n%s", stdout_txt)
+            stdout_tail = "\n".join(stdout_txt.strip().splitlines()[-40:])
+            if stdout_tail:
+                logger.info("STDOUT push_pdf (tail):\n%s", stdout_tail)
         if stderr_txt:
-            logger.warning("STDERR push_pdf:\n%s", stderr_txt)
+            stderr_tail = "\n".join(stderr_txt.strip().splitlines()[-40:])
+            if stderr_tail:
+                logger.warning("STDERR push_pdf (tail):\n%s", stderr_tail)
 
         if exit_status != 0:
             raise RuntimeError(
@@ -219,7 +220,7 @@ def push_pdf_task(
             os.unlink(local_ipp_file)
         client.close()
 
-    logger.info("Push PDF distant terminé avec succès.")
+    logger.info("Staging PDF distant termine avec succes.")
 
 
 # ---------------------------------------------------------------------------
@@ -233,31 +234,47 @@ def run_tnm_extraction_task(
     remote_script: str,
     remote_data_dir: str,
     ssh_password_var_key: str,
+    remote_output_dir: Optional[str] = None,
+    remote_python_bin: str = "python3",
+    remote_csv_name: str = "ipp_stage_results.csv",
+    remote_command_timeout: Optional[int] = None,
     **kwargs,
 ) -> None:
     """
     Lance extract_tnm_stage_by_ipp.py sur le serveur distant via SSH.
-    Le script reçoit remote_data_dir comme répertoire d'entrée et de sortie.
+    Le script reçoit remote_data_dir comme répertoire d'entrée et écrit le CSV
+    dans remote_output_dir.
     """
     client = _get_ssh_client(remote_host, remote_port, remote_user, ssh_password_var_key)
     try:
+        output_dir = remote_output_dir or remote_data_dir
         cmd = (
-            f"python3 {remote_script} "
-            f"{remote_data_dir} "
-            f"--output-dir {remote_data_dir} "
+            f"mkdir -p {shlex.quote(output_dir)} && "
+            f"{shlex.quote(remote_python_bin)} {shlex.quote(remote_script)} "
+            f"{shlex.quote(remote_data_dir)} "
+            f"--output-dir {shlex.quote(output_dir)} "
             f"--ipp-strategy baseline "
-            f"--log-level INFO"
+            f"--log-level INFO "
+            f"--csv-name {shlex.quote(remote_csv_name)}"
         )
         logger.info("Commande SSH : %s", cmd)
-        _, stdout, stderr = client.exec_command(cmd, timeout=1800)
-        exit_status = stdout.channel.recv_exit_status()
+        _, stdout, stderr = client.exec_command(
+            cmd,
+            timeout=remote_command_timeout,
+            get_pty=True,
+        )
         stdout_txt = stdout.read().decode("utf-8", errors="replace")
         stderr_txt = stderr.read().decode("utf-8", errors="replace")
+        exit_status = stdout.channel.recv_exit_status()
 
         if stdout_txt:
-            logger.info("STDOUT:\n%s", stdout_txt)
+            stdout_tail = "\n".join(stdout_txt.strip().splitlines()[-40:])
+            if stdout_tail:
+                logger.info("STDOUT regex (tail):\n%s", stdout_tail)
         if stderr_txt:
-            logger.warning("STDERR:\n%s", stderr_txt)
+            stderr_tail = "\n".join(stderr_txt.strip().splitlines()[-40:])
+            if stderr_tail:
+                logger.warning("STDERR regex (tail):\n%s", stderr_tail)
 
         if exit_status != 0:
             raise RuntimeError(
@@ -283,6 +300,10 @@ def fetch_csv_task(
     **kwargs,
 ) -> None:
     """Télécharge le CSV résultant depuis le serveur distant vers Airflow."""
+    local_dir = os.path.dirname(local_csv_path)
+    if local_dir:
+        os.makedirs(local_dir, exist_ok=True)
+
     client = _get_ssh_client(remote_host, remote_port, remote_user, ssh_password_var_key)
     try:
         sftp = client.open_sftp()

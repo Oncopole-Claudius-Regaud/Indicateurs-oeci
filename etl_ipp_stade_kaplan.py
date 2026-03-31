@@ -80,14 +80,11 @@ with DAG(
             "remote_host": "srvlakehouse",
             "remote_port": 22,
             "remote_user": "administrateur",
-            "remote_dir": "/home/administrateur/pdf_llm",
             "ssh_password_var_key": "password_serverlakehouse",
             "remote_script": "/opt/push_pdf_llm.py",
             "source_dir": "/opt/PDF",
-            "target_host": "10.210.22.130",
-            "target_port": 22,
-            "target_user": "administrateur",
-            "target_password_var_key": "password_clidatadsin",
+            "stage_dir": "/opt/pdf_llm_stage",
+            "link_mode": "symlink",
         },
     )
 
@@ -98,15 +95,15 @@ with DAG(
         task_id="run_tnm_regex_extraction",
         python_callable=run_tnm_extraction_task,
         op_kwargs={
-            "remote_host": "10.210.22.130",
+            "remote_host": "srvlakehouse",
             "remote_port": 22,
             "remote_user": "administrateur",
-            "remote_script": (
-                "/home/administrateur/airflow/dags/LLM_Extract_PDF/"
-                "extract_tnm_stage_by_ipp.py"
-            ),
-            "remote_data_dir": "/home/administrateur/pdf_llm",
-            "ssh_password_var_key": "password_clidatadsin",
+            "remote_script": "/opt/llm_extract/extract_tnm_stage_by_ipp.py",
+            "remote_data_dir": "/opt/pdf_llm_stage",
+            "remote_output_dir": "/opt/llm_output",
+            "remote_python_bin": "/opt/llm_extract_venv/bin/python",
+            "remote_csv_name": "ipp_stage_results.csv",
+            "ssh_password_var_key": "password_serverlakehouse",
         },
     )
 
@@ -117,12 +114,12 @@ with DAG(
         task_id="fetch_tnm_csv",
         python_callable=fetch_csv_task,
         op_kwargs={
-            "remote_host": "10.210.22.130",
+            "remote_host": "srvlakehouse",
             "remote_port": 22,
             "remote_user": "administrateur",
-            "remote_csv_path": "/home/administrateur/pdf_llm/ipp_stage_results.csv",
-            "local_csv_path": "/tmp/ipp_stage_results.csv",
-            "ssh_password_var_key": "password_clidatadsin",
+            "remote_csv_path": "/opt/llm_output/ipp_stage_results.csv",
+            "local_csv_path": "/home/administrateur/pdf_llm/ipp_stage_results.csv",
+            "ssh_password_var_key": "password_serverlakehouse",
         },
     )
 
@@ -133,7 +130,7 @@ with DAG(
         task_id="load_ipp_stade_to_db",
         python_callable=load_ipp_stade_task,
         op_kwargs={
-            "local_csv_path": "/tmp/ipp_stage_results.csv",
+            "local_csv_path": "/home/administrateur/pdf_llm/ipp_stage_results.csv",
             "conn_id": POSTGRES_CONN_ID,
         },
     )

@@ -5,12 +5,11 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, Optional
-
-import paramiko
 
 
 @dataclass
@@ -79,6 +78,21 @@ def parse_args() -> argparse.Namespace:
         help="Repertoire cible sur le serveur distant",
     )
     parser.add_argument(
+        "--stage-dir",
+        help="Repertoire local de staging sur la machine courante",
+    )
+    parser.add_argument(
+        "--link-mode",
+        choices=["symlink", "hardlink", "copy"],
+        default="symlink",
+        help="Mode de materialisation dans --stage-dir",
+    )
+    parser.add_argument(
+        "--clean-stage-dir",
+        action="store_true",
+        help="Vide --stage-dir avant de recreer les liens/fichiers",
+    )
+    parser.add_argument(
         "--airflow-password-key",
         default="password_clidatadsin",
         help="Cle Airflow Variable contenant le mot de passe SSH de destination",
@@ -122,6 +136,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--report-path",
         help="Chemin d'un fichier JSON de rapport",
+    )
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=200,
+        help="Frequence des logs de progression pendant l'upload",
     )
     parser.add_argument(
         "--verbose",
@@ -292,7 +312,68 @@ def collect_candidates(local_dir: Path, target_ipps: set[str]) -> tuple[list[Can
     return candidates, eligible
 
 
-def sftp_mkdir_p(sftp: paramiko.SFTPClient, remote_dir: str) -> None:
+def clear_directory(target_dir: Path) -> None:
+    for child in target_dir.iterdir():
+        if child.is_symlink() or child.is_file():
+            child.unlink()
+        elif child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink(missing_ok=True)
+
+
+def stage_candidates(
+    candidates: list[Candidate],
+    stage_dir: Path,
+    link_mode: str,
+    clean_stage_dir: bool,
+    progress_every: int,
+    logger: logging.Logger,
+) -> tuple[int, int]:
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    if clean_stage_dir:
+        clear_directory(stage_dir)
+
+    ok = 0
+    ko = 0
+
+    for index, candidate in enumerate(candidates, start=1):
+        try:
+            if link_mode == "symlink":
+                os.symlink(candidate.json_path, stage_dir / candidate.json_path.name)
+                os.symlink(candidate.pdf_path, stage_dir / candidate.pdf_path.name)
+            elif link_mode == "hardlink":
+                os.link(candidate.json_path, stage_dir / candidate.json_path.name)
+                os.link(candidate.pdf_path, stage_dir / candidate.pdf_path.name)
+            else:
+                shutil.copy2(candidate.json_path, stage_dir / candidate.json_path.name)
+                shutil.copy2(candidate.pdf_path, stage_dir / candidate.pdf_path.name)
+
+            candidate.uploaded = True
+            ok += 1
+            should_log_progress = (
+                index == 1
+                or index == len(candidates)
+                or (progress_every > 0 and index % progress_every == 0)
+            )
+            if should_log_progress:
+                logger.info(
+                    "Progress staging %d/%d - OK:%d KO:%d - dernier IPP=%s",
+                    index,
+                    len(candidates),
+                    ok,
+                    ko,
+                    candidate.ipp,
+                )
+        except Exception as exc:
+            candidate.upload_error = str(exc)
+            ko += 1
+            logger.error("Echec staging %s : %s", candidate.json_path.name, exc)
+
+    return ok, ko
+
+
+def sftp_mkdir_p(sftp, remote_dir: str) -> None:
     remote_dir = remote_dir.rstrip("/")
     if not remote_dir:
         return
@@ -319,8 +400,11 @@ def upload_candidates(
     remote_user: str,
     remote_dir: str,
     remote_password: str,
+    progress_every: int,
     logger: logging.Logger,
 ) -> tuple[int, int]:
+    import paramiko
+
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     client.connect(
@@ -345,18 +429,24 @@ def upload_candidates(
                     remote_json = f"{remote_dir.rstrip('/')}/{candidate.json_path.name}"
                     remote_pdf = f"{remote_dir.rstrip('/')}/{candidate.pdf_path.name}"
 
-                    logger.info(
-                        "(%d/%d) Upload IPP=%s : %s + %s",
-                        index,
-                        len(candidates),
-                        candidate.ipp,
-                        candidate.json_path.name,
-                        candidate.pdf_path.name,
-                    )
                     sftp.put(str(candidate.json_path), remote_json)
                     sftp.put(str(candidate.pdf_path), remote_pdf)
                     candidate.uploaded = True
                     ok += 1
+                    should_log_progress = (
+                        index == 1
+                        or index == len(candidates)
+                        or (progress_every > 0 and index % progress_every == 0)
+                    )
+                    if should_log_progress:
+                        logger.info(
+                            "Progress upload %d/%d - OK:%d KO:%d - dernier IPP=%s",
+                            index,
+                            len(candidates),
+                            ok,
+                            ko,
+                            candidate.ipp,
+                        )
                 except Exception as exc:
                     candidate.upload_error = str(exc)
                     ko += 1
@@ -474,19 +564,31 @@ def main() -> int:
             write_report(Path(args.report_path), args, candidates)
         return 0
 
-    remote_password = resolve_remote_password(args)
+    if args.stage_dir:
+        ok, ko = stage_candidates(
+            candidates=eligible,
+            stage_dir=Path(args.stage_dir),
+            link_mode=args.link_mode,
+            clean_stage_dir=args.clean_stage_dir,
+            progress_every=args.progress_every,
+            logger=logger,
+        )
+        logger.info("Staging termine - OK:%d KO:%d", ok, ko)
+    else:
+        remote_password = resolve_remote_password(args)
 
-    ok, ko = upload_candidates(
-        candidates=eligible,
-        remote_host=args.remote_host,
-        remote_port=args.remote_port,
-        remote_user=args.remote_user,
-        remote_dir=args.remote_dir,
-        remote_password=remote_password,
-        logger=logger,
-    )
+        ok, ko = upload_candidates(
+            candidates=eligible,
+            remote_host=args.remote_host,
+            remote_port=args.remote_port,
+            remote_user=args.remote_user,
+            remote_dir=args.remote_dir,
+            remote_password=remote_password,
+            progress_every=args.progress_every,
+            logger=logger,
+        )
 
-    logger.info("Upload termine - OK:%d KO:%d", ok, ko)
+        logger.info("Upload termine - OK:%d KO:%d", ok, ko)
 
     if args.report_path:
         write_report(Path(args.report_path), args, candidates)
