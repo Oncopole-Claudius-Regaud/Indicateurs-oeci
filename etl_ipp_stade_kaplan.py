@@ -12,10 +12,11 @@ from kaplan_meier_processing import (
     load_to_db_task,
 )
 from ipp_stade_tasks import (
-    extract_ipp_task,
+    extract_ipp_without_stage_task,
     push_pdf_task,
     run_tnm_extraction_task,
     fetch_csv_task,
+    cleanup_remote_dir_task,
     load_ipp_stade_task,
     refresh_view_task,
     extract_and_clean_data_for_organe_task,
@@ -59,11 +60,11 @@ with DAG(
     DATE_FIN_OBS = "{{ dag_run.conf.get('date_fin_obs', (macros.datetime.now().year - 1) ~ '-12-31') }}"
 
     # ------------------------------------------------------------------
-    # 1. Extraction des IPP depuis v_statut_vital
+    # 1. Extraction des IPP sans stade depuis v_statut_vital
     # ------------------------------------------------------------------
-    t_extract_ipp = PythonOperator(
-        task_id="extract_ipp_from_statut_vital",
-        python_callable=extract_ipp_task,
+    t_extract_ipp_without_stage = PythonOperator(
+        task_id="extract_ipp_without_stage_from_statut_vital",
+        python_callable=extract_ipp_without_stage_task,
         op_kwargs={
             "date_debut_obs": DATE_DEBUT_OBS,
             "conn_id": POSTGRES_CONN_ID,
@@ -81,6 +82,7 @@ with DAG(
             "remote_port": 22,
             "remote_user": "administrateur",
             "ssh_password_var_key": "password_serverlakehouse",
+            "ipp_task_id": "extract_ipp_without_stage_from_statut_vital",
             "remote_script": "/opt/push_pdf_llm.py",
             "source_dir": "/opt/PDF",
             "stage_dir": "/home/administrateur/pdf_llm_stage",
@@ -108,7 +110,22 @@ with DAG(
     )
 
     # ------------------------------------------------------------------
-    # 4. Rapatriement du CSV vers Airflow
+    # 4. Nettoyage du dossier de staging sur le lakehouse
+    # ------------------------------------------------------------------
+    t_cleanup_stage_dir = PythonOperator(
+        task_id="cleanup_remote_stage_dir",
+        python_callable=cleanup_remote_dir_task,
+        op_kwargs={
+            "remote_host": "srvlakehouse",
+            "remote_port": 22,
+            "remote_user": "administrateur",
+            "remote_dir": "/home/administrateur/pdf_llm_stage",
+            "ssh_password_var_key": "password_serverlakehouse",
+        },
+    )
+
+    # ------------------------------------------------------------------
+    # 5. Rapatriement du CSV vers Airflow
     # ------------------------------------------------------------------
     t_fetch_csv = PythonOperator(
         task_id="fetch_tnm_csv",
@@ -124,7 +141,7 @@ with DAG(
     )
 
     # ------------------------------------------------------------------
-    # 5. Chargement dans datamart_oeci_survie.ipp_stade
+    # 6. Chargement dans datamart_oeci_survie.ipp_stade
     # ------------------------------------------------------------------
     t_load_stade = PythonOperator(
         task_id="load_ipp_stade_to_db",
@@ -136,7 +153,7 @@ with DAG(
     )
 
     # ------------------------------------------------------------------
-    # 6. Refresh de la vue v_statut_vital
+    # 7. Refresh de la vue v_statut_vital
     # ------------------------------------------------------------------
     t_refresh_view = PythonOperator(
         task_id="refresh_view_statut_vital",
@@ -202,9 +219,10 @@ with DAG(
     # Chaîne principale
     # ------------------------------------------------------------------
     (
-        t_extract_ipp
+        t_extract_ipp_without_stage
         >> t_push_pdf
         >> t_run_tnm
+        >> t_cleanup_stage_dir
         >> t_fetch_csv
         >> t_load_stade
         >> t_refresh_view

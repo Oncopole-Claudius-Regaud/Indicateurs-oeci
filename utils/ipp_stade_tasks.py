@@ -65,15 +65,18 @@ def _scp_put_files(
 # 1. Extraction des IPP depuis v_statut_vital
 # ---------------------------------------------------------------------------
 
-def extract_ipp_task(date_debut_obs: str, conn_id: str = "postgres_test", **kwargs) -> None:
-    """
-    Extrait tous les IPP distincts depuis datamart_oeci_survie.v_statut_vital
-    dont date_diag_tkc (ou date_diag_dcc) >= 2020-01-01.
-
-    Pousse le résultat en XCom : liste JSON des IPP (strings).
-    """
+def _extract_ipp_df(
+    date_debut_obs: str,
+    conn_id: str,
+    only_missing_stage: bool,
+) -> pd.DataFrame:
     hook = PostgresHook(postgres_conn_id=conn_id)
     year = str(date_debut_obs)[:4]
+    stage_filter = ""
+    if only_missing_stage:
+        stage_filter = """
+        AND NULLIF(BTRIM(COALESCE(stade::text, '')), '') IS NULL
+        """
 
     query = f"""
     SELECT DISTINCT ON (ipp_ocr)
@@ -86,10 +89,22 @@ def extract_ipp_task(date_debut_obs: str, conn_id: str = "postgres_test", **kwar
     WHERE
         organe IS NOT NULL
         AND code_cim IS NOT NULL
+        AND (
+            UPPER(BTRIM(organe::text)) = 'SEIN'
+            OR (
+                UPPER(BTRIM(organe::text)) = 'UROLOGIE'
+                AND LEFT(UPPER(BTRIM(code_cim::text)), 3) = 'C61'
+            )
+            OR (
+                UPPER(BTRIM(organe::text)) = 'PEAU'
+                AND LEFT(UPPER(BTRIM(code_cim::text)), 3) = 'C43'
+            )
+        )
         AND COALESCE(date_diag_tkc, date_diag_dcc) IS NOT NULL
         AND EXTRACT(YEAR FROM COALESCE(date_diag_tkc, date_diag_dcc))::int >= {int(year)}
         AND ipp_ocr IS NOT NULL
         AND ipp_ocr <> ''
+        {stage_filter}
     ORDER BY
         ipp_ocr,
         COALESCE(date_diag_tkc, date_diag_dcc) DESC NULLS LAST,
@@ -100,12 +115,48 @@ def extract_ipp_task(date_debut_obs: str, conn_id: str = "postgres_test", **kwar
 
     conn = hook.get_conn()
     try:
-        df = pd.read_sql_query(query, conn)
+        return pd.read_sql_query(query, conn)
     finally:
         conn.close()
 
+
+def extract_ipp_task(date_debut_obs: str, conn_id: str = "postgres_test", **kwargs) -> None:
+    """
+    Extrait tous les IPP distincts depuis datamart_oeci_survie.v_statut_vital
+    dont date_diag_tkc (ou date_diag_dcc) >= 2020-01-01.
+
+    Pousse le résultat en XCom : liste JSON des IPP (strings).
+    """
+    df = _extract_ipp_df(
+        date_debut_obs=date_debut_obs,
+        conn_id=conn_id,
+        only_missing_stage=False,
+    )
+
     ipp_list = df["ipp_ocr"].astype(str).str.strip().tolist()
     logger.info("IPP extraits : %d", len(ipp_list))
+
+    ti = kwargs["ti"]
+    ti.xcom_push(key="ipp_list", value=ipp_list)
+
+
+def extract_ipp_without_stage_task(
+    date_debut_obs: str,
+    conn_id: str = "postgres_test",
+    **kwargs,
+) -> None:
+    """
+    Extrait uniquement les IPP dont la colonne stade est absente dans
+    datamart_oeci_survie.v_statut_vital.
+    """
+    df = _extract_ipp_df(
+        date_debut_obs=date_debut_obs,
+        conn_id=conn_id,
+        only_missing_stage=True,
+    )
+
+    ipp_list = df["ipp_ocr"].astype(str).str.strip().tolist()
+    logger.info("IPP sans stade extraits : %d", len(ipp_list))
 
     ti = kwargs["ti"]
     ti.xcom_push(key="ipp_list", value=ipp_list)
@@ -120,6 +171,7 @@ def push_pdf_task(
     remote_port: int,
     remote_user: str,
     ssh_password_var_key: str,
+    ipp_task_id: str = "extract_ipp_from_statut_vital",
     remote_script: str = "/opt/push_pdf_llm.py",
     source_dir: str = "/opt/PDF",
     stage_dir: str = "/home/administrateur/pdf_llm_stage",
@@ -139,7 +191,8 @@ def push_pdf_task(
     """
     ti = kwargs["ti"]
     ipp_list: list[str] = ti.xcom_pull(
-        task_ids="extract_ipp_from_statut_vital", key="ipp_list"
+        task_ids=ipp_task_id,
+        key="ipp_list",
     )
     if not ipp_list:
         logger.warning("Aucun IPP reçu en XCom – rien à envoyer.")
@@ -331,6 +384,45 @@ def fetch_csv_task(
     logger.info("CSV récupéré : %s", local_csv_path)
 
 
+def cleanup_remote_dir_task(
+    remote_host: str,
+    remote_port: int,
+    remote_user: str,
+    remote_dir: str,
+    ssh_password_var_key: str,
+    remote_command_timeout: Optional[int] = None,
+    **kwargs,
+) -> None:
+    """Vide le contenu d'un répertoire distant sans supprimer le dossier racine."""
+    client = _get_ssh_client(remote_host, remote_port, remote_user, ssh_password_var_key)
+    try:
+        cmd = (
+            f"mkdir -p {shlex.quote(remote_dir)} && "
+            f"find {shlex.quote(remote_dir)} -mindepth 1 -maxdepth 1 -exec rm -rf -- {{}} +"
+        )
+        logger.info("Nettoyage distant : %s", cmd)
+        _, stdout, stderr = client.exec_command(cmd, timeout=remote_command_timeout)
+        exit_status = stdout.channel.recv_exit_status()
+        stdout_txt = stdout.read().decode("utf-8", errors="replace")
+        stderr_txt = stderr.read().decode("utf-8", errors="replace")
+
+        if stdout_txt.strip():
+            logger.info("STDOUT cleanup:\n%s", stdout_txt.strip())
+        if stderr_txt.strip():
+            logger.warning("STDERR cleanup:\n%s", stderr_txt.strip())
+
+        if exit_status != 0:
+            error_excerpt = (stderr_txt or stdout_txt).strip()[:1000]
+            raise RuntimeError(
+                f"Le nettoyage distant de {remote_dir} a terminé avec le code {exit_status}. "
+                f"Détail: {error_excerpt}"
+            )
+    finally:
+        client.close()
+
+    logger.info("Nettoyage distant terminé : %s", remote_dir)
+
+
 # ---------------------------------------------------------------------------
 # 5. Chargement dans datamart_oeci_survie.ipp_stade
 # ---------------------------------------------------------------------------
@@ -431,6 +523,44 @@ def _series_or_default(df: pd.DataFrame, column: str, default: object = None) ->
     return pd.Series([default] * len(df), index=df.index, dtype="object")
 
 
+def _drop_embedded_header_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Supprime les lignes du corps CSV qui correspondent en réalité au header.
+    """
+    if df.empty:
+        return df
+
+    text_columns = [column for column in df.columns if isinstance(column, str)]
+    if not text_columns:
+        return df
+
+    lowered = (
+        df[text_columns]
+        .fillna("")
+        .astype(str)
+        .apply(lambda series: series.str.strip().str.lower())
+    )
+
+    match_count = pd.Series(0, index=df.index, dtype="int64")
+    for column in text_columns:
+        match_count = match_count.add((lowered[column] == column.lower()).astype("int64"))
+
+    ipp_header_mask = pd.Series(False, index=df.index)
+    if "ipp" in lowered.columns:
+        ipp_header_mask = lowered["ipp"].isin({"ipp", "ipp_ocr"})
+
+    header_mask = ipp_header_mask | (match_count >= 3)
+    removed = int(header_mask.sum())
+    if removed:
+        logger.warning(
+            "Suppression de %d ligne(s) de header parasite dans le CSV avant insertion.",
+            removed,
+        )
+        return df.loc[~header_mask].copy()
+
+    return df
+
+
 def _fetch_statut_vital_metadata(pg_conn, ipps: list[str]) -> pd.DataFrame:
     if not ipps:
         return pd.DataFrame(
@@ -487,6 +617,11 @@ def load_ipp_stade_task(
 
     if df.empty:
         logger.warning("CSV vide, rien à charger.")
+        return
+
+    df = _drop_embedded_header_rows(df)
+    if df.empty:
+        logger.warning("CSV ne contient que des headers parasites, rien à charger.")
         return
 
     # Nettoyage
