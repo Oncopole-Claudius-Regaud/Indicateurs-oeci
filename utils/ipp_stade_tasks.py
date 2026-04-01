@@ -314,8 +314,10 @@ def run_tnm_extraction_task(
     client = _get_ssh_client(remote_host, remote_port, remote_user, ssh_password_var_key)
     try:
         output_dir = remote_output_dir or remote_data_dir
+        output_csv_path = f"{output_dir.rstrip('/')}/{remote_csv_name}"
         cmd = (
             f"mkdir -p {shlex.quote(output_dir)} && "
+            f"rm -f {shlex.quote(output_csv_path)} && "
             f"{shlex.quote(remote_python_bin)} {shlex.quote(remote_script)} "
             f"{shlex.quote(remote_data_dir)} "
             f"--output-dir {shlex.quote(output_dir)} "
@@ -706,13 +708,6 @@ def load_ipp_stade_task(
             df = df.drop_duplicates(subset=["ipp"], keep="last")
 
         with pg_conn.cursor() as cur:
-            ipps = df["ipp"].tolist()
-            cur.execute(
-                f"DELETE FROM {full_table} WHERE ipp = ANY(%s)",
-                (ipps,),
-            )
-            logger.info("DELETE pour %d IPP dans %s", len(ipps), full_table)
-
             last_update = datetime.utcnow()
             rows = []
             for _, row in df.iterrows():
