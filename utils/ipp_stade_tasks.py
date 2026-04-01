@@ -5,6 +5,8 @@ import logging
 import os
 import shlex
 import tempfile
+from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -74,7 +76,12 @@ def extract_ipp_task(date_debut_obs: str, conn_id: str = "postgres_test", **kwar
     year = str(date_debut_obs)[:4]
 
     query = f"""
-    SELECT DISTINCT ipp_ocr
+    SELECT DISTINCT ON (ipp_ocr)
+        ipp_ocr,
+        organe,
+        code_cim,
+        date_diag_tkc::date AS date_diag_tkc,
+        date_diag_dcc::date AS date_diag_dcc
     FROM datamart_oeci_survie.v_statut_vital
     WHERE
         organe IS NOT NULL
@@ -83,6 +90,11 @@ def extract_ipp_task(date_debut_obs: str, conn_id: str = "postgres_test", **kwar
         AND EXTRACT(YEAR FROM COALESCE(date_diag_tkc, date_diag_dcc))::int >= {int(year)}
         AND ipp_ocr IS NOT NULL
         AND ipp_ocr <> ''
+    ORDER BY
+        ipp_ocr,
+        COALESCE(date_diag_tkc, date_diag_dcc) DESC NULLS LAST,
+        date_diag_tkc DESC NULLS LAST,
+        date_diag_dcc DESC NULLS LAST
     ;
     """
 
@@ -336,13 +348,126 @@ STAGE_MAPPING = {
 }
 
 
-def _normalize_stage(raw: str) -> Optional[str]:
+def _normalize_stage(raw: object) -> Optional[str]:
     """Convertit 'Stage IIA (Mx)' → 'IIA', None si non reconnu."""
-    if not raw or raw == "null":
+    if raw is None or pd.isna(raw):
+        return None
+    raw = str(raw).strip()
+    if not raw or raw.lower() in {"null", "nan"}:
         return None
     # Retire le suffixe "(Mx)" éventuel
     clean = raw.split("(")[0].strip()
     return STAGE_MAPPING.get(clean, clean[:20] if clean else None)
+
+
+def _normalize_text(raw: object) -> Optional[str]:
+    if raw is None or pd.isna(raw):
+        return None
+    value = str(raw).strip()
+    if not value or value.lower() in {"null", "nan", "nat"}:
+        return None
+    return value
+
+
+def _parse_date_value(raw: object) -> Optional[str]:
+    value = _normalize_text(raw)
+    if value is None:
+        return None
+    if len(value) == 8 and value.isdigit():
+        return f"{value[:4]}-{value[4:6]}-{value[6:8]}"
+
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return parsed.date().isoformat()
+
+
+def _parse_bool_value(raw: object) -> Optional[bool]:
+    value = _normalize_text(raw)
+    if value is None:
+        return None
+    lowered = value.lower()
+    if lowered in {"true", "t", "1", "yes", "y", "oui"}:
+        return True
+    if lowered in {"false", "f", "0", "no", "n", "non"}:
+        return False
+    return None
+
+
+def _parse_int_value(raw: object) -> Optional[int]:
+    value = _normalize_text(raw)
+    if value is None:
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_text_array(raw: object) -> Optional[list[str]]:
+    value = _normalize_text(raw)
+    if value is None:
+        return None
+
+    if value.startswith("[") and value.endswith("]"):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                items = [_normalize_text(item) for item in parsed]
+                cleaned = [item for item in items if item]
+                return cleaned or None
+        except Exception:
+            pass
+
+    normalized = value.replace("|", ",").replace(";", ",")
+    items = [_normalize_text(item) for item in normalized.split(",")]
+    cleaned = [item for item in items if item]
+    return cleaned or None
+
+
+def _series_or_default(df: pd.DataFrame, column: str, default: object = None) -> pd.Series:
+    if column in df.columns:
+        return df[column]
+    return pd.Series([default] * len(df), index=df.index, dtype="object")
+
+
+def _fetch_statut_vital_metadata(pg_conn, ipps: list[str]) -> pd.DataFrame:
+    if not ipps:
+        return pd.DataFrame(
+            columns=["ipp", "organe", "code_cim", "date_diag_tkc", "date_diag_dcc"]
+        )
+
+    query = """
+        WITH ranked AS (
+            SELECT
+                ipp_ocr::text AS ipp,
+                organe::text AS organe,
+                code_cim::text AS code_cim,
+                date_diag_tkc::date AS date_diag_tkc,
+                date_diag_dcc::date AS date_diag_dcc,
+                ROW_NUMBER() OVER (
+                    PARTITION BY ipp_ocr
+                    ORDER BY
+                        COALESCE(date_diag_tkc, date_diag_dcc) DESC NULLS LAST,
+                        date_diag_tkc DESC NULLS LAST,
+                        date_diag_dcc DESC NULLS LAST
+                ) AS rn
+            FROM datamart_oeci_survie.v_statut_vital
+            WHERE
+                ipp_ocr = ANY(%s)
+                AND ipp_ocr IS NOT NULL
+                AND ipp_ocr <> ''
+        )
+        SELECT
+            ipp,
+            organe,
+            code_cim,
+            date_diag_tkc,
+            date_diag_dcc
+        FROM ranked
+        WHERE rn = 1
+    """
+    return pd.read_sql_query(query, pg_conn, params=(ipps,))
 
 
 def load_ipp_stade_task(
@@ -351,11 +476,9 @@ def load_ipp_stade_task(
     **kwargs,
 ) -> None:
     """
-    Lit le CSV ipp_stage_results.csv et effectue un UPSERT dans
-    datamart_oeci_survie.ipp_stade (colonnes : ipp, date_diagnostic, organe, stade).
-
-    La table est supposée exister avec les colonnes visibles en pièce jointe.
-    On fait un DELETE + INSERT par batch pour rester idempotent.
+    Lit le CSV ipp_stage_results.csv, enrichit chaque ligne avec les métadonnées
+    de v_statut_vital, puis effectue un UPSERT complet dans
+    datamart_oeci_survie.ipp_stade.
     """
     from psycopg2.extras import execute_values
 
@@ -367,34 +490,87 @@ def load_ipp_stade_task(
         return
 
     # Nettoyage
-    df["ipp"] = df["ipp"].fillna("").str.strip()
+    df["ipp"] = df["ipp"].fillna("").astype(str).str.strip()
     df = df[df["ipp"] != ""]
+    if df.empty:
+        logger.warning("CSV sans IPP valide, rien à charger.")
+        return
+
+    df["stage"] = _series_or_default(df, "stage")
     df["stade_norm"] = df["stage"].apply(_normalize_stage)
-
-    # date_diagnostic : on utilise document_date (format YYYYMMDD → DATE)
-    def parse_doc_date(v: str) -> Optional[str]:
-        if not v or v == "null":
-            return None
-        v = str(v).strip()
-        if len(v) == 8 and v.isdigit():
-            return f"{v[:4]}-{v[4:6]}-{v[6:8]}"
-        return None
-
-    df["date_diag_fmt"] = df["document_date"].apply(parse_doc_date)
-
-    # organe : non présent dans le CSV de sortie du script regex, on met NULL
-    # (sera rempli lors du refresh vue si nécessaire)
-    organe_col = df["organe"] if "organe" in df.columns else pd.Series([""] * len(df))
+    df["tnm_raw"] = _series_or_default(df, "tnm_raw")
+    df["t"] = _series_or_default(df, "t")
+    df["n"] = _series_or_default(df, "n")
+    df["m"] = _series_or_default(df, "m")
+    df["document_date_fmt"] = _series_or_default(df, "document_date").apply(_parse_date_value)
+    df["source_pdf"] = _series_or_default(df, "source_pdf")
+    df["status"] = _series_or_default(df, "status")
+    df["reason"] = _series_or_default(df, "reason")
+    df["selection_reason"] = _series_or_default(df, "selection_reason")
+    df["document_kind"] = _series_or_default(df, "document_kind")
+    df["tnm_context"] = _series_or_default(df, "tnm_context")
+    df["treatment_detected_bool"] = _series_or_default(df, "treatment_detected").apply(_parse_bool_value)
+    df["treatment_keywords_arr"] = _series_or_default(df, "treatment_keywords").apply(_parse_text_array)
+    df["surgery_detected_bool"] = _series_or_default(df, "surgery_detected").apply(_parse_bool_value)
+    df["chemo_detected_bool"] = _series_or_default(df, "chemo_detected").apply(_parse_bool_value)
+    df["radiotherapy_detected_bool"] = _series_or_default(df, "radiotherapy_detected").apply(_parse_bool_value)
+    df["metastasis_detected_bool"] = _series_or_default(df, "metastasis_detected").apply(_parse_bool_value)
+    df["documents_seen_int"] = _series_or_default(df, "documents_seen").apply(_parse_int_value)
+    df["documents_with_stage_int"] = _series_or_default(df, "documents_with_stage").apply(_parse_int_value)
 
     hook = PostgresHook(postgres_conn_id=conn_id)
     pg_conn = hook.get_conn()
     schema  = "datamart_oeci_survie"
     table   = "ipp_stade"
     full_table = f"{schema}.{table}"
+    export_columns = [
+        "ipp",
+        "organe",
+        "code_cim",
+        "date_diag_tkc",
+        "date_diag_dcc",
+        "stage",
+        "tnm_raw",
+        "t",
+        "n",
+        "m",
+        "document_date",
+        "source_pdf",
+        "status",
+        "reason",
+        "selection_reason",
+        "document_kind",
+        "tnm_context",
+        "treatment_detected",
+        "treatment_keywords",
+        "surgery_detected",
+        "chemo_detected",
+        "radiotherapy_detected",
+        "metastasis_detected",
+        "documents_seen",
+        "documents_with_stage",
+        "last_update",
+    ]
 
     try:
+        metadata_df = _fetch_statut_vital_metadata(
+            pg_conn,
+            df["ipp"].drop_duplicates().tolist(),
+        )
+        if not metadata_df.empty:
+            metadata_df["ipp"] = metadata_df["ipp"].astype(str).str.strip()
+            metadata_df["date_diag_tkc"] = metadata_df["date_diag_tkc"].apply(_parse_date_value)
+            metadata_df["date_diag_dcc"] = metadata_df["date_diag_dcc"].apply(_parse_date_value)
+
+        df = df.merge(metadata_df, on="ipp", how="left", suffixes=("_csv", ""))
+
+        if df["ipp"].duplicated().any():
+            logger.warning(
+                "IPP dupliqués détectés dans le CSV enrichi, conservation de la dernière ligne par IPP."
+            )
+            df = df.drop_duplicates(subset=["ipp"], keep="last")
+
         with pg_conn.cursor() as cur:
-            # UPSERT : on supprime d'abord les IPP présents dans ce batch
             ipps = df["ipp"].tolist()
             cur.execute(
                 f"DELETE FROM {full_table} WHERE ipp = ANY(%s)",
@@ -402,31 +578,111 @@ def load_ipp_stade_task(
             )
             logger.info("DELETE pour %d IPP dans %s", len(ipps), full_table)
 
+            last_update = datetime.utcnow()
             rows = []
             for _, row in df.iterrows():
-                stade = row.get("stade_norm")
-                if not stade:
-                    continue
                 rows.append((
                     row["ipp"],
-                    row.get("date_diag_fmt"),
-                    row.get("organe", None) or None,
-                    stade,
+                    _normalize_text(row.get("organe")),
+                    _normalize_text(row.get("code_cim")),
+                    row.get("date_diag_tkc"),
+                    row.get("date_diag_dcc"),
+                    row.get("stade_norm"),
+                    _normalize_text(row.get("tnm_raw")),
+                    _normalize_text(row.get("t")),
+                    _normalize_text(row.get("n")),
+                    _normalize_text(row.get("m")),
+                    row.get("document_date_fmt"),
+                    _normalize_text(row.get("source_pdf")),
+                    _normalize_text(row.get("status")),
+                    _normalize_text(row.get("reason")),
+                    _normalize_text(row.get("selection_reason")),
+                    _normalize_text(row.get("document_kind")),
+                    _normalize_text(row.get("tnm_context")),
+                    row.get("treatment_detected_bool"),
+                    row.get("treatment_keywords_arr"),
+                    row.get("surgery_detected_bool"),
+                    row.get("chemo_detected_bool"),
+                    row.get("radiotherapy_detected_bool"),
+                    row.get("metastasis_detected_bool"),
+                    row.get("documents_seen_int"),
+                    row.get("documents_with_stage_int"),
+                    last_update,
                 ))
 
             if rows:
+                enriched_csv_path = str(
+                    Path(local_csv_path).with_name(
+                        f"{Path(local_csv_path).stem}_enriched.csv"
+                    )
+                )
+                pd.DataFrame(rows, columns=export_columns).to_csv(
+                    enriched_csv_path,
+                    index=False,
+                )
+                logger.info("CSV enrichi écrit : %s", enriched_csv_path)
+
                 insert_sql = f"""
-                    INSERT INTO {full_table} (ipp, date_diagnostic, organe, stade)
+                    INSERT INTO {full_table} (
+                        ipp,
+                        organe,
+                        code_cim,
+                        date_diag_tkc,
+                        date_diag_dcc,
+                        stage,
+                        tnm_raw,
+                        t,
+                        n,
+                        m,
+                        document_date,
+                        source_pdf,
+                        status,
+                        reason,
+                        selection_reason,
+                        document_kind,
+                        tnm_context,
+                        treatment_detected,
+                        treatment_keywords,
+                        surgery_detected,
+                        chemo_detected,
+                        radiotherapy_detected,
+                        metastasis_detected,
+                        documents_seen,
+                        documents_with_stage,
+                        last_update
+                    )
                     VALUES %s
                     ON CONFLICT (ipp) DO UPDATE
-                        SET date_diagnostic = EXCLUDED.date_diagnostic,
-                            organe          = EXCLUDED.organe,
-                            stade           = EXCLUDED.stade
+                        SET organe                = EXCLUDED.organe,
+                            code_cim              = EXCLUDED.code_cim,
+                            date_diag_tkc         = EXCLUDED.date_diag_tkc,
+                            date_diag_dcc         = EXCLUDED.date_diag_dcc,
+                            stage                 = EXCLUDED.stage,
+                            tnm_raw               = EXCLUDED.tnm_raw,
+                            t                     = EXCLUDED.t,
+                            n                     = EXCLUDED.n,
+                            m                     = EXCLUDED.m,
+                            document_date         = EXCLUDED.document_date,
+                            source_pdf            = EXCLUDED.source_pdf,
+                            status                = EXCLUDED.status,
+                            reason                = EXCLUDED.reason,
+                            selection_reason      = EXCLUDED.selection_reason,
+                            document_kind         = EXCLUDED.document_kind,
+                            tnm_context           = EXCLUDED.tnm_context,
+                            treatment_detected    = EXCLUDED.treatment_detected,
+                            treatment_keywords    = EXCLUDED.treatment_keywords,
+                            surgery_detected      = EXCLUDED.surgery_detected,
+                            chemo_detected        = EXCLUDED.chemo_detected,
+                            radiotherapy_detected = EXCLUDED.radiotherapy_detected,
+                            metastasis_detected   = EXCLUDED.metastasis_detected,
+                            documents_seen        = EXCLUDED.documents_seen,
+                            documents_with_stage  = EXCLUDED.documents_with_stage,
+                            last_update           = EXCLUDED.last_update
                 """
                 execute_values(cur, insert_sql, rows, page_size=500)
                 logger.info("INSERT %d lignes dans %s", len(rows), full_table)
             else:
-                logger.warning("Aucun stade valide à insérer.")
+                logger.warning("Aucune ligne à insérer.")
 
         pg_conn.commit()
     except Exception:
