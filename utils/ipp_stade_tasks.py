@@ -75,7 +75,7 @@ def _extract_ipp_df(
     stage_filter = ""
     if only_missing_stage:
         stage_filter = """
-        AND NULLIF(BTRIM(COALESCE(stade::text, '')), '') IS NULL
+        AND NULLIF(BTRIM(COALESCE(stage::text, '')), '') IS NULL
         """
 
     query = f"""
