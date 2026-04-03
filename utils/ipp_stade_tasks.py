@@ -589,6 +589,19 @@ def _fetch_statut_vital_metadata(pg_conn, ipps: list[str]) -> pd.DataFrame:
                 ipp_ocr = ANY(%s)
                 AND ipp_ocr IS NOT NULL
                 AND ipp_ocr <> ''
+                AND organe IS NOT NULL
+                AND code_cim IS NOT NULL
+                AND (
+                    UPPER(BTRIM(organe::text)) = 'SEIN'
+                    OR (
+                        UPPER(BTRIM(organe::text)) = 'UROLOGIE'
+                        AND LEFT(UPPER(BTRIM(code_cim::text)), 3) = 'C61'
+                    )
+                    OR (
+                        UPPER(BTRIM(organe::text)) = 'PEAU'
+                        AND LEFT(UPPER(BTRIM(code_cim::text)), 3) = 'C43'
+                    )
+                )
         )
         SELECT
             ipp,
