@@ -9,6 +9,7 @@ from datetime import datetime
 from io import StringIO
 import numpy as np
 from lifelines import KaplanMeierFitter
+import re
 import unicodedata
 
 # ==============================================================================
@@ -27,6 +28,32 @@ def _normalize_status(value):
     normalized = unicodedata.normalize("NFKD", str(value))
     normalized = normalized.encode("ascii", "ignore").decode("ascii")
     return " ".join(normalized.strip().lower().split())
+
+
+def _normalize_stage_label(value):
+    if pd.isna(value):
+        return ""
+    clean = str(value).strip()
+    if not clean or clean.lower() in {"null", "nan"}:
+        return ""
+    clean = clean.split("(")[0].strip().upper()
+    clean = re.sub(r"^(STADE|STAGE)\s+", "", clean).strip()
+    clean = clean.replace("AJCC", "").strip()
+    clean = {"1": "I", "2": "II", "3": "III", "4": "IV"}.get(clean, clean)
+    return f"Stage {clean}" if clean else ""
+
+
+def _collapse_stage_label_for_breast(value):
+    normalized = _normalize_stage_label(value)
+    if not normalized:
+        return ""
+
+    match = re.match(r"^Stage\s+(0|IV|III|II|I)([A-D]?)$", normalized, re.IGNORECASE)
+    if not match:
+        return normalized
+
+    major_stage = match.group(1).upper()
+    return f"Stage {major_stage}"
 
 
 def _death_in_observation_window_mask(df_patient, start_obs, end_obs):
@@ -159,7 +186,15 @@ def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=No
         conn.close()
 
     df["ipp_ocr"] = df["ipp_ocr"].fillna("")
-    df["stade"] = df["stade"].fillna("") if "stade" in df.columns else ""
+    if "stade" in df.columns:
+        stage_normalizer = (
+            _collapse_stage_label_for_breast
+            if str(organe).strip().upper() == "SEIN"
+            else _normalize_stage_label
+        )
+        df["stade"] = df["stade"].apply(stage_normalizer)
+    else:
+        df["stade"] = ""
     return df.to_json(date_format="iso")
 
 

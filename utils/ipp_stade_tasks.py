@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shlex
 import tempfile
 from datetime import datetime
@@ -490,36 +491,29 @@ def cleanup_remote_dir_task(
 # 5. Chargement dans datamart_oeci_survie.ipp_stade
 # ---------------------------------------------------------------------------
 
-# Mapping stade texte → code court pour la colonne VARCHAR de la table
-STAGE_MAPPING = {
-    "Stage 0":    "0",
-    "Stage IA":   "IA",
-    "Stage IB":   "IB",
-    "Stage I":    "I",
-    "Stage IIA":  "IIA",
-    "Stage IIB":  "IIB",
-    "Stage IIC":  "IIC",
-    "Stage II":   "II",
-    "Stage IIIA": "IIIA",
-    "Stage IIIB": "IIIB",
-    "Stage IIIC": "IIIC",
-    "Stage III":  "III",
-    "Stage IVA":  "IVA",
-    "Stage IVB":  "IVB",
-    "Stage IV":   "IV",
+# Mapping stade texte → libelle canonique
+STAGE_DIGIT_MAPPING = {
+    "1": "I",
+    "2": "II",
+    "3": "III",
+    "4": "IV",
 }
 
 
 def _normalize_stage(raw: object) -> Optional[str]:
-    """Convertit 'Stage IIA (Mx)' → 'IIA', None si non reconnu."""
+    """Convertit 'IIA' ou 'Stage IIA (Mx)' → 'Stage IIA'."""
     if raw is None or pd.isna(raw):
         return None
     raw = str(raw).strip()
     if not raw or raw.lower() in {"null", "nan"}:
         return None
-    # Retire le suffixe "(Mx)" éventuel
-    clean = raw.split("(")[0].strip()
-    return STAGE_MAPPING.get(clean, clean[:20] if clean else None)
+    clean = raw.split("(")[0].strip().upper()
+    clean = re.sub(r"^(STADE|STAGE)\s+", "", clean).strip()
+    clean = clean.replace("AJCC", "").strip()
+    clean = STAGE_DIGIT_MAPPING.get(clean, clean)
+    if not clean:
+        return None
+    return f"Stage {clean}"
 
 
 def _normalize_text(raw: object) -> Optional[str]:
