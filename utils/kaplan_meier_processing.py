@@ -43,7 +43,7 @@ def _normalize_stage_label(value):
     return f"Stage {clean}" if clean else ""
 
 
-def _collapse_stage_label_for_breast(value):
+def _collapse_stage_label_to_major_stage(value):
     normalized = _normalize_stage_label(value)
     if not normalized:
         return ""
@@ -187,12 +187,7 @@ def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=No
 
     df["ipp_ocr"] = df["ipp_ocr"].fillna("")
     if "stade" in df.columns:
-        stage_normalizer = (
-            _collapse_stage_label_for_breast
-            if str(organe).strip().upper() == "SEIN"
-            else _normalize_stage_label
-        )
-        df["stade"] = df["stade"].apply(stage_normalizer)
+        df["stade"] = df["stade"].apply(_collapse_stage_label_to_major_stage)
     else:
         df["stade"] = ""
     return df.to_json(date_format="iso")
