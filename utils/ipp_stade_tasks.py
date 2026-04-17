@@ -65,6 +65,24 @@ def _scp_put_files(
 # 1. Extraction des IPP depuis v_statut_vital
 # ---------------------------------------------------------------------------
 
+
+def _ipp_records_from_df(df: pd.DataFrame) -> list[dict[str, Optional[str]]]:
+    records: list[dict[str, Optional[str]]] = []
+    for _, row in df.iterrows():
+        ipp = str(row.get("ipp_ocr", "")).strip()
+        if not ipp:
+            continue
+        records.append(
+            {
+                "ipp": ipp,
+                "organe": None if pd.isna(row.get("organe")) else str(row.get("organe")).strip() or None,
+                "code_cim": None if pd.isna(row.get("code_cim")) else str(row.get("code_cim")).strip() or None,
+                "date_diag_tkc": None if pd.isna(row.get("date_diag_tkc")) else str(row.get("date_diag_tkc")),
+                "date_diag_dcc": None if pd.isna(row.get("date_diag_dcc")) else str(row.get("date_diag_dcc")),
+            }
+        )
+    return records
+
 def _extract_ipp_df(
     date_debut_obs: str,
     conn_id: str,
@@ -138,6 +156,7 @@ def extract_ipp_task(date_debut_obs: str, conn_id: str = "postgres_test", **kwar
 
     ti = kwargs["ti"]
     ti.xcom_push(key="ipp_list", value=ipp_list)
+    ti.xcom_push(key="ipp_records", value=_ipp_records_from_df(df))
 
 
 def extract_ipp_without_stage_task(
@@ -160,6 +179,7 @@ def extract_ipp_without_stage_task(
 
     ti = kwargs["ti"]
     ti.xcom_push(key="ipp_list", value=ipp_list)
+    ti.xcom_push(key="ipp_records", value=_ipp_records_from_df(df))
 
 
 # ---------------------------------------------------------------------------
@@ -300,9 +320,11 @@ def run_tnm_extraction_task(
     remote_script: str,
     remote_data_dir: str,
     ssh_password_var_key: str,
+    ipp_task_id: str = "extract_ipp_from_statut_vital",
     remote_output_dir: Optional[str] = None,
     remote_python_bin: str = "python3",
     remote_csv_name: str = "ipp_stage_results.csv",
+    remote_tmp_dir: str = "/tmp",
     remote_command_timeout: Optional[int] = None,
     **kwargs,
 ) -> None:
@@ -311,10 +333,38 @@ def run_tnm_extraction_task(
     Le script reçoit remote_data_dir comme répertoire d'entrée et écrit le CSV
     dans remote_output_dir.
     """
+    ti = kwargs["ti"]
+    ipp_records: list[dict[str, Optional[str]]] = ti.xcom_pull(
+        task_ids=ipp_task_id,
+        key="ipp_records",
+    ) or []
+
     client = _get_ssh_client(remote_host, remote_port, remote_user, ssh_password_var_key)
+    local_metadata_file: Optional[str] = None
+    remote_metadata_file: Optional[str] = None
+    sftp = None
     try:
         output_dir = remote_output_dir or remote_data_dir
         output_csv_path = f"{output_dir.rstrip('/')}/{remote_csv_name}"
+        if ipp_records:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                suffix=".json",
+                prefix="ipp_metadata_",
+                delete=False,
+                encoding="utf-8",
+            ) as tmp:
+                json.dump({"ipp_records": ipp_records}, tmp, ensure_ascii=False)
+                local_metadata_file = tmp.name
+
+            remote_metadata_file = (
+                f"{remote_tmp_dir.rstrip('/')}/"
+                f"{os.path.basename(local_metadata_file)}"
+            )
+            sftp = client.open_sftp()
+            sftp.put(local_metadata_file, remote_metadata_file)
+            logger.info("Métadonnées IPP copiées sur %s:%s", remote_host, remote_metadata_file)
+
         cmd = (
             f"mkdir -p {shlex.quote(output_dir)} && "
             f"rm -f {shlex.quote(output_csv_path)} && "
@@ -325,6 +375,8 @@ def run_tnm_extraction_task(
             f"--log-level INFO "
             f"--csv-name {shlex.quote(remote_csv_name)}"
         )
+        if remote_metadata_file:
+            cmd += f" --ipp-metadata-file {shlex.quote(remote_metadata_file)}"
         logger.info("Commande SSH : %s", cmd)
         _, stdout, stderr = client.exec_command(
             cmd,
@@ -352,6 +404,15 @@ def run_tnm_extraction_task(
             )
         logger.info("Extraction TNM terminée avec succès.")
     finally:
+        if sftp is not None:
+            if remote_metadata_file:
+                try:
+                    sftp.remove(remote_metadata_file)
+                except Exception:
+                    pass
+            sftp.close()
+        if local_metadata_file and os.path.exists(local_metadata_file):
+            os.unlink(local_metadata_file)
         client.close()
 
 
@@ -432,12 +493,19 @@ def cleanup_remote_dir_task(
 # Mapping stade texte → code court pour la colonne VARCHAR de la table
 STAGE_MAPPING = {
     "Stage 0":    "0",
+    "Stage IA":   "IA",
+    "Stage IB":   "IB",
     "Stage I":    "I",
     "Stage IIA":  "IIA",
     "Stage IIB":  "IIB",
+    "Stage IIC":  "IIC",
+    "Stage II":   "II",
     "Stage IIIA": "IIIA",
     "Stage IIIB": "IIIB",
     "Stage IIIC": "IIIC",
+    "Stage III":  "III",
+    "Stage IVA":  "IVA",
+    "Stage IVB":  "IVB",
     "Stage IV":   "IV",
 }
 

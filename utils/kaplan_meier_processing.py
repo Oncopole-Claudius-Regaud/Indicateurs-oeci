@@ -83,7 +83,7 @@ def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=No
         v.date_diag_dcc,
         v.date_derniere_nouvelle,
         v.statut_vital,
-        s.stage
+        s.stage AS stade
     FROM {FULL_TABLE_PATH} v
     LEFT JOIN datamart_oeci_survie.ipp_stade s
         ON s.ipp = v.ipp_ocr

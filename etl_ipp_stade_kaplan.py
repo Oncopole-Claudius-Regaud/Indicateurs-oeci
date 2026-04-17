@@ -102,6 +102,7 @@ with DAG(
             "remote_user": "administrateur",
             "remote_script": "/opt/llm_extract/extract_tnm_stage_by_ipp.py",
             "remote_data_dir": "/home/administrateur/pdf_llm_stage",
+            "ipp_task_id": "extract_ipp_without_stage_from_statut_vital",
             "remote_output_dir": "/home/administrateur/llm_output",
             "remote_python_bin": "/opt/llm_extract_venv/bin/python",
             "remote_csv_name": "ipp_stage_results.csv",
