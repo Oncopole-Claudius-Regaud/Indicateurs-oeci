@@ -61,6 +61,64 @@ def _compute_final_patient_counts(df_patient, start_obs, end_obs):
         "nb_pdv_fin_courbe": int(is_pdv.sum()),
     }
 
+
+def _compute_km_outputs(df_patient, start_obs, end_obs, stade=None):
+    if df_patient.empty:
+        return [], [], {
+            "nb_decedes_fin_courbe": 0,
+            "nb_vivants_fin_courbe": 0,
+            "nb_pdv_fin_courbe": 0,
+        }
+
+    final_patient_counts = _compute_final_patient_counts(df_patient, start_obs, end_obs)
+
+    kmf = KaplanMeierFitter()
+    kmf.fit(df_patient["time_years"], event_observed=df_patient["event_observed"])
+
+    curve_df = (
+        kmf.survival_function_
+        .join(kmf.confidence_interval_survival_function_)
+        .reset_index()
+    )
+    curve_df.columns = ["time_years", "survival_rate", "ic_lower", "ic_upper"]
+    if stade is not None:
+        curve_df["stade"] = stade
+
+    key_indicators = []
+    max_followup_years = float(df_patient["time_years"].max())
+    for t in [1, 5, 10]:
+        if t > max_followup_years:
+            kpi = {
+                "time_point": t,
+                "survival_rate": None,
+                "ic_low_pct": None,
+                "ic_high_pct": None,
+            }
+        else:
+            try:
+                surv = float(kmf.survival_function_at_times(t).iloc[0]) * 100
+                ci = kmf.confidence_interval_survival_function_.loc[:t].iloc[-1] * 100
+                kpi = {
+                    "time_point": t,
+                    "survival_rate": round(surv, 2),
+                    "ic_low_pct": round(float(ci.iloc[0]), 2),
+                    "ic_high_pct": round(float(ci.iloc[1]), 2),
+                }
+            except Exception:
+                kpi = {
+                    "time_point": t,
+                    "survival_rate": None,
+                    "ic_low_pct": None,
+                    "ic_high_pct": None,
+                }
+
+        kpi.update(final_patient_counts)
+        if stade is not None:
+            kpi["stade"] = stade
+        key_indicators.append(kpi)
+
+    return curve_df.to_dict(orient="records"), key_indicators, final_patient_counts
+
 # ==============================================================================
 # 1. Extraction & nettoyage
 # ==============================================================================
@@ -83,10 +141,8 @@ def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=No
         v.date_diag_dcc,
         v.date_derniere_nouvelle,
         v.statut_vital,
-        s.stage AS stade
+        v.stage AS stade
     FROM {FULL_TABLE_PATH} v
-    LEFT JOIN datamart_oeci_survie.ipp_stade s
-        ON s.ipp = v.ipp_ocr
     WHERE v.organe = '{organe}'
       AND v.organe IS NOT NULL
       AND v.code_cim IS NOT NULL
@@ -189,46 +245,27 @@ def calculate_kaplan_meier_task(ti, **kwargs):
     stade_dist = df_patient["stade"].value_counts().to_dict()
     print(f"Distribution des stades : {stade_dist}")
 
-    kmf = KaplanMeierFitter()
-    kmf.fit(df_patient["time_years"], event_observed=df_patient["event_observed"])
+    curve_rows, key_indicators, _ = _compute_km_outputs(df_patient, start_obs, end_obs)
 
-    curve_df = (
-        kmf.survival_function_
-        .join(kmf.confidence_interval_survival_function_)
-        .reset_index()
-    )
-    curve_df.columns = ["time_years", "survival_rate", "ic_lower", "ic_upper"]
-
-    key_indicators = []
-    max_followup_years = float(df_patient["time_years"].max())
-    for t in [1, 5, 10]:
-        if t > max_followup_years:
-            key_indicators.append({
-                "time_point": t,
-                "survival_rate": None,
-                "ic_low_pct": None,
-                "ic_high_pct": None,
-            })
-            continue
-        try:
-            surv = float(kmf.survival_function_at_times(t).iloc[0]) * 100
-            ci = kmf.confidence_interval_survival_function_.loc[:t].iloc[-1] * 100
-            key_indicators.append({
-                "time_point": t,
-                "survival_rate": round(surv, 2),
-                "ic_low_pct": round(float(ci.iloc[0]), 2),
-                "ic_high_pct": round(float(ci.iloc[1]), 2),
-            })
-        except Exception:
-            key_indicators.append({
-                "time_point": t,
-                "survival_rate": None,
-                "ic_low_pct": None,
-                "ic_high_pct": None,
-            })
-
-    for kpi in key_indicators:
-        kpi.update(final_patient_counts)
+    curve_rows_by_stade = []
+    key_indicators_by_stade = []
+    known_stades = sorted(value for value in df_patient["stade"].dropna().unique() if value != "")
+    for stade in known_stades:
+        df_stage = df_patient[df_patient["stade"] == stade].copy()
+        stage_curve_rows, stage_kpis, stage_counts = _compute_km_outputs(
+            df_stage,
+            start_obs,
+            end_obs,
+            stade=stade,
+        )
+        curve_rows_by_stade.extend(stage_curve_rows)
+        key_indicators_by_stade.extend(stage_kpis)
+        print(
+            f"Stade {stade} â€“ decedes: {stage_counts['nb_decedes_fin_courbe']}, "
+            f"vivants: {stage_counts['nb_vivants_fin_courbe']}, "
+            f"pdv: {stage_counts['nb_pdv_fin_courbe']}, "
+            f"patients: {len(df_stage)}"
+        )
 
     # Stade majoritaire de la cohorte (pour alimenter la colonne stade des tables KM)
     stade_majoritaire = (
@@ -238,8 +275,14 @@ def calculate_kaplan_meier_task(ti, **kwargs):
     )
 
     return {
-        "curve_data": curve_df.to_json(orient="records"),
+        "curve_data": pd.DataFrame(curve_rows).to_json(orient="records"),
+        "curve_data_by_stade": (
+            pd.DataFrame(curve_rows_by_stade).to_json(orient="records")
+            if curve_rows_by_stade
+            else None
+        ),
         "key_indicators": key_indicators,
+        "key_indicators_by_stade": key_indicators_by_stade,
         "final_patient_counts": final_patient_counts,
         "stade_majoritaire": stade_majoritaire,
     }
@@ -293,9 +336,11 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
                 (schema, table_name),
             )
             available_cols = {row[0] for row in cur.fetchall()}
-            has_stade_col = "stade" in available_cols
+            stage_col = "stade" if "stade" in available_cols else "stage" if "stage" in available_cols else None
+            has_stage_col = stage_col is not None
+            has_stade_col = has_stage_col
 
-            if has_stade_col:
+            if has_stage_col:
                 print(f"✅ Colonne 'stade' détectée dans {full_table}")
             else:
                 print(f"ℹ️ Colonne 'stade' absente de {full_table} – ignorée")
@@ -308,7 +353,12 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
             # Courbe KM
             # ---------------------------------------------------------------
             if table_name.startswith("datamart_km_curve"):
-                curve_df = pd.read_json(StringIO(results["curve_data"]))
+                curve_json = (
+                    results.get("curve_data_by_stade")
+                    if has_stade_col and results.get("curve_data_by_stade")
+                    else results["curve_data"]
+                )
+                curve_df = pd.read_json(StringIO(curve_json))
                 curve_df = curve_df.replace({np.nan: None})
 
                 insert_cols = [
@@ -316,7 +366,7 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
                     "organe", "date_start_obs", "date_end_obs",
                 ]
                 if has_stade_col:
-                    insert_cols.append("stade")
+                    insert_cols.append(stage_col)
 
                 rows = []
                 for r in curve_df.itertuples(index=False):
@@ -325,7 +375,7 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
                         organe, date_start_obs_year, date_end_obs_year,
                     ]
                     if has_stade_col:
-                        row.append(stade_majoritaire)
+                        row.append(getattr(r, "stade", None) or stade_majoritaire)
                     rows.append(tuple(row))
 
                 if rows:
@@ -341,7 +391,12 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
             # Indicateurs clés KM
             # ---------------------------------------------------------------
             elif table_name.startswith("datamart_km_key_indicators"):
-                kpi_df = pd.DataFrame(results["key_indicators"])
+                kpi_rows = (
+                    results.get("key_indicators_by_stade")
+                    if has_stade_col and results.get("key_indicators_by_stade")
+                    else results["key_indicators"]
+                )
+                kpi_df = pd.DataFrame(kpi_rows)
                 if not kpi_df.empty:
                     kpi_df = kpi_df.replace({np.nan: None})
 
@@ -364,7 +419,7 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
                 if can_store_counts:
                     insert_cols.extend(count_cols)
                 if has_stade_col:
-                    insert_cols.append("stade")
+                    insert_cols.append(stage_col)
 
                 rows = []
                 for r in kpi_df.itertuples(index=False):
@@ -378,12 +433,12 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
                     ]
                     if can_store_counts:
                         row.extend([
-                            _to_str_or_none(final_counts.get("nb_decedes_fin_courbe")),
-                            _to_str_or_none(final_counts.get("nb_vivants_fin_courbe")),
-                            _to_str_or_none(final_counts.get("nb_pdv_fin_courbe")),
+                            _to_str_or_none(getattr(r, "nb_decedes_fin_courbe", final_counts.get("nb_decedes_fin_courbe"))),
+                            _to_str_or_none(getattr(r, "nb_vivants_fin_courbe", final_counts.get("nb_vivants_fin_courbe"))),
+                            _to_str_or_none(getattr(r, "nb_pdv_fin_courbe", final_counts.get("nb_pdv_fin_courbe"))),
                         ])
                     if has_stade_col:
-                        row.append(stade_majoritaire)
+                        row.append(getattr(r, "stade", None) or stade_majoritaire)
                     rows.append(tuple(row))
 
                 if rows:
