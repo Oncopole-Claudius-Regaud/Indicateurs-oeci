@@ -89,3 +89,29 @@ jobs:
           echo "Etat final du repo déployé :"
           git -C "$TARGET" status --short --branch
           git -C "$TARGET" rev-parse HEAD
+
+      - name: Copy extract_tnm_by_ipp.py to srvlakehouse
+        shell: bash
+        env:
+          SRVLAKEHOUSE_USER: ${{ secrets.SRVLAKEHOUSE_USER }}
+          SRVLAKEHOUSE_PASSWORD: ${{ secrets.SRVLAKEHOUSE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          LOCAL_FILE="$GITHUB_WORKSPACE/extract_tnm_stage_by_ipp.py"
+          REMOTE_HOST="srvlakehouse"
+          REMOTE_DIR="/opt/llm_extract"
+          REMOTE_FILE="$REMOTE_DIR/extract_tnm_by_ipp.py"
+
+          [ -n "${SRVLAKEHOUSE_USER:-}" ] || { echo "Erreur: secret SRVLAKEHOUSE_USER manquant"; exit 1; }
+          [ -n "${SRVLAKEHOUSE_PASSWORD:-}" ] || { echo "Erreur: secret SRVLAKEHOUSE_PASSWORD manquant"; exit 1; }
+          [ -f "$LOCAL_FILE" ] || { echo "Erreur: fichier source introuvable: $LOCAL_FILE"; exit 1; }
+          command -v sshpass >/dev/null 2>&1 || { echo "Erreur: sshpass n'est pas installé sur le runner"; exit 1; }
+          command -v ssh >/dev/null 2>&1 || { echo "Erreur: ssh n'est pas installé sur le runner"; exit 1; }
+          command -v scp >/dev/null 2>&1 || { echo "Erreur: scp n'est pas installé sur le runner"; exit 1; }
+
+          SSH_TARGET="${SRVLAKEHOUSE_USER}@${REMOTE_HOST}"
+          SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+          sshpass -p "$SRVLAKEHOUSE_PASSWORD" ssh $SSH_OPTS "$SSH_TARGET" "mkdir -p '$REMOTE_DIR'"
+          sshpass -p "$SRVLAKEHOUSE_PASSWORD" scp $SSH_OPTS "$LOCAL_FILE" "${SSH_TARGET}:${REMOTE_FILE}"
