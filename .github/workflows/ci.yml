@@ -8,6 +8,7 @@ on:
 jobs:
   deploy:
     runs-on: self-hosted
+    environment: develop
 
     steps:
       - name: Checkout repository (full history)
