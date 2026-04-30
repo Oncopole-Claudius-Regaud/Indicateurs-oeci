@@ -102,7 +102,7 @@ jobs:
           LOCAL_FILE="$GITHUB_WORKSPACE/extract_tnm_stage_by_ipp.py"
           REMOTE_HOST="srvlakehouse"
           REMOTE_DIR="/opt/llm_extract"
-          REMOTE_FILE="$REMOTE_DIR/extract_tnm_by_ipp.py"
+          REMOTE_FILE="$REMOTE_DIR/extract_tnm_stage_by_ipp.py"
 
           [ -n "${SRVLAKEHOUSE_USER:-}" ] || { echo "Erreur: secret SRVLAKEHOUSE_USER manquant"; exit 1; }
           [ -n "${SRVLAKEHOUSE_PASSWORD:-}" ] || { echo "Erreur: secret SRVLAKEHOUSE_PASSWORD manquant"; exit 1; }
