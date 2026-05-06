@@ -508,10 +508,10 @@ def _normalize_stage(raw: object) -> Optional[str]:
     if not raw or raw.lower() in {"null", "nan"}:
         return None
     clean = raw.split("(")[0].strip().upper()
-    clean = re.sub(r"^(STADE|STAGE)\s+", "", clean).strip()
+    clean = re.sub(r"^(STADE|STAGE)\s*", "", clean).strip()
     clean = clean.replace("AJCC", "").strip()
     clean = STAGE_DIGIT_MAPPING.get(clean, clean)
-    if not clean:
+    if not clean or not re.fullmatch(r"0|IV|III[ABC]?|II[ABC]?|I[ABC]?", clean):
         return None
     return f"Stage {clean}"
 

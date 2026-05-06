@@ -37,10 +37,12 @@ def _normalize_stage_label(value):
     if not clean or clean.lower() in {"null", "nan"}:
         return ""
     clean = clean.split("(")[0].strip().upper()
-    clean = re.sub(r"^(STADE|STAGE)\s+", "", clean).strip()
+    clean = re.sub(r"^(STADE|STAGE)\s*", "", clean).strip()
     clean = clean.replace("AJCC", "").strip()
     clean = {"1": "I", "2": "II", "3": "III", "4": "IV"}.get(clean, clean)
-    return f"Stage {clean}" if clean else ""
+    if not clean or not re.fullmatch(r"0|IV|III[ABC]?|II[ABC]?|I[ABC]?", clean):
+        return ""
+    return f"Stage {clean}"
 
 
 def _collapse_stage_label_to_major_stage(value):
@@ -150,6 +152,24 @@ def _compute_km_outputs(df_patient, start_obs, end_obs, stade=None):
 # 1. Extraction & nettoyage
 # ==============================================================================
 
+def _normalize_observation_start_date(date_debut_obs):
+    if date_debut_obs is None:
+        raise ValueError("Parametre 'date_debut_obs' manquant.")
+
+    raw_value = str(date_debut_obs).strip()
+    if not raw_value:
+        raise ValueError("Parametre 'date_debut_obs' vide.")
+
+    if re.fullmatch(r"\d{4}", raw_value):
+        return f"{raw_value}-01-01"
+
+    parsed = pd.to_datetime(raw_value, errors="coerce")
+    if pd.isna(parsed):
+        raise ValueError(
+            "Parametre 'date_debut_obs' invalide. Formats attendus: 'YYYY' ou 'YYYY-MM-DD'."
+        )
+    return parsed.strftime("%Y-%m-%d")
+
 def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=None):
     """
     Extrait les données de survie depuis v_statut_vital pour un organe donné.
@@ -158,6 +178,7 @@ def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=No
     """
     hook = get_postgres_hook(conn_id)
     FULL_TABLE_PATH = "datamart_oeci_survie.v_statut_vital"
+    date_diag_min = _normalize_observation_start_date(date_debut_obs)
 
     query = f"""
     SELECT
@@ -174,8 +195,7 @@ def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=No
       AND v.organe IS NOT NULL
       AND v.code_cim IS NOT NULL
       AND COALESCE(v.date_diag_tkc, v.date_diag_dcc) IS NOT NULL
-      AND EXTRACT(YEAR FROM COALESCE(v.date_diag_tkc, v.date_diag_dcc))::int
-            = SUBSTRING('{date_debut_obs}' FROM 1 FOR 4)::int
+      AND COALESCE(v.date_diag_tkc, v.date_diag_dcc)::date >= DATE '{date_diag_min}'
     ;
     """
 
