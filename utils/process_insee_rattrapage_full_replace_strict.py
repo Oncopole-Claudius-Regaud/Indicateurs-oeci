@@ -23,6 +23,7 @@ CANDIDATE_DIRS = [
 ]
 
 FILE_PATTERNS = ["*.csv", "deces*.csv", "Deces*.csv"]
+TXT_PATTERNS = ["*.txt", "deces*.txt", "Deces*.txt"]
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -167,7 +168,72 @@ def _list_files(input_dir: str) -> list[str]:
     paths = []
     for pat in FILE_PATTERNS:
         paths.extend(glob(os.path.join(input_dir, pat)))
+    for pat in TXT_PATTERNS:
+        paths.extend(glob(os.path.join(input_dir, pat)))
     return sorted(set(paths))
+
+
+def _yyyymmdd_to_date_series(series: pd.Series) -> pd.Series:
+    s = series.astype(str).str.strip()
+    valid = s.str.fullmatch(r"\d{8}") & ~s.str[4:6].isin(["00"]) & ~s.str[6:8].isin(["00"])
+    out = pd.to_datetime(s.where(valid), format="%Y%m%d", errors="coerce").dt.date
+    return out
+
+
+def _read_txt_fixed_width(path: str) -> pd.DataFrame:
+    rows = []
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if len(line) < 162:
+                continue
+
+            nom_prenoms = line[0:80].strip()
+            sexe = line[80:81].strip()
+            date_naiss = line[81:89].strip()
+            code_insee = line[89:94].strip()
+            commune = line[94:124].strip()
+            date_deces = line[154:162].strip()
+
+            nom, prenoms = "", ""
+            if "*" in nom_prenoms:
+                a, b = nom_prenoms.split("*", 1)
+                nom = _clean_tail(a)
+                prenoms = _clean_tail(b)
+            else:
+                parts = re.split(r"[;\s]+", nom_prenoms, maxsplit=1)
+                if len(parts) == 2:
+                    nom, prenoms = _clean_tail(parts[0]), _clean_tail(parts[1])
+                else:
+                    nom, prenoms = _clean_tail(nom_prenoms), ""
+
+            rows.append(
+                {
+                    "nom": nom,
+                    "prenoms": prenoms,
+                    "sexe": sexe,
+                    "date_naissance": date_naiss,
+                    "code_insee_lieu_naissance": code_insee,
+                    "commune_naissance": commune,
+                    "date_deces": date_deces,
+                }
+            )
+
+    if not rows:
+        return pd.DataFrame(columns=OUTPUT_COLS)
+
+    out = pd.DataFrame(rows)
+    before = len(out)
+    out["date_naissance"] = _yyyymmdd_to_date_series(out["date_naissance"])
+    out["date_deces"] = _yyyymmdd_to_date_series(out["date_deces"])
+    out = out.dropna(subset=["date_naissance", "date_deces"])
+    logger.info(
+        "[TXT] %s: %d lignes lues, %d après validation dates",
+        os.path.basename(path),
+        before,
+        len(out),
+    )
+    return out[OUTPUT_COLS]
 
 def build_combined_dataframe_strict(input_dir: str | None = None) -> pd.DataFrame:
     input_dir = _resolve_input_dir(input_dir)
@@ -180,9 +246,13 @@ def build_combined_dataframe_strict(input_dir: str | None = None) -> pd.DataFram
     combined = []
     cumul = 0
     for i, path in enumerate(files, 1):
-        logger.info(f"[INSEE] ({i}/{len(files)}) Lecture CSV : {path}")
-        raw = _read_csv(path)
-        df = transform_insee_df_strict(raw)
+        logger.info(f"[INSEE] ({i}/{len(files)}) Lecture fichier : {path}")
+        lower = path.lower()
+        if lower.endswith(".txt"):
+            df = _read_txt_fixed_width(path)
+        else:
+            raw = _read_csv(path)
+            df = transform_insee_df_strict(raw)
         n = len(df)
         cumul += n
         logger.info(f"[ACCUM] +{n} ligne(s) depuis {os.path.basename(path)} | cumul = {cumul}")
