@@ -17,6 +17,7 @@ TABLE_NAME = "ref_source_externe.insee_ref"
 # Dossiers possibles (tu peux aussi passer input_dir via op_kwargs du DAG)
 CANDIDATE_DIRS = [
     os.environ.get("OECI_INSEE_INPUT_DIR"),
+    "/home/administrateur/insee_rattrapage_all",
     str(Path(__file__).resolve().parent / "insee_month_rattrapage"),
     "/home/administrateur/airflow/dags/oeci/insee_month_rattrapage",
 ]

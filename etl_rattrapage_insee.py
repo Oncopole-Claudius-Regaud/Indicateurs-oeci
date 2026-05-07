@@ -24,6 +24,6 @@ with DAG(
         python_callable=process_insee_rattrapage_full_replace,
         op_kwargs={
             # Laisse vide pour autodétection, ou précise le chemin exact :
-            "input_dir": "/home/administrateur/airflow/dags/oeci/insee_month_rattrapage",
+            "input_dir": "/home/administrateur/insee_rattrapage_all",
         },
     )
