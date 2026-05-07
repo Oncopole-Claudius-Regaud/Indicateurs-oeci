@@ -12,7 +12,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from utils.db import get_postgres_hook
 
-TABLE_NAME = "oeci.insee_ref"
+TABLE_NAME = "ref_source_externe.insee_ref"
 
 # Dossiers possibles (tu peux aussi passer input_dir via op_kwargs du DAG)
 CANDIDATE_DIRS = [
