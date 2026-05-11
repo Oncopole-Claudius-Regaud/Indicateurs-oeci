@@ -3,7 +3,7 @@ import os
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.utils.dates import days_ago
-from datetime import timedelta
+from datetime import datetime, timedelta
 sys.path.append(os.path.dirname(__file__))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -15,7 +15,7 @@ from utils.insee_loader import (
 
 default_args = {
     'owner': 'DATA-IA',
-    'start_date': days_ago(1),
+    'start_date': datetime(2026, 1, 1),  # date fixe
     'retries': 1,
     'retry_delay': timedelta(minutes=5),
 }
