@@ -24,6 +24,7 @@ dag = DAG(
     dag_id="etl_insee_deces_monthly",
     default_args=default_args,
     description="Import du fichier mensuel INSEE des décès",
+    schedule_interval=None,
     catchup=False,
     tags=["insee", "deces", "mensuel"]
 )
