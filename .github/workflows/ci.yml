@@ -43,9 +43,9 @@ jobs:
 
           mkdir -p "$PARENT_DIR"
 
-          # Refuser un lien symbolique pour éviter toute surprise
+          # Refuser un lien symbolique pour eviter toute surprise
           if [ -L "$TARGET" ]; then
-            echo "Erreur: $TARGET est un lien symbolique, déploiement annulé."
+            echo "Erreur: $TARGET est un lien symbolique, deploiement annule."
             exit 1
           fi
 
@@ -54,44 +54,44 @@ jobs:
             git clone --no-local "$SOURCE_REPO" "$TARGET"
           fi
 
-          # Si la cible existe, elle doit être un vrai dépôt Git
+          # Si la cible existe, elle doit etre un vrai depot Git
           if [ ! -d "$TARGET" ]; then
             echo "Erreur: $TARGET existe mais n'est pas un dossier."
             exit 1
           fi
 
           if [ ! -d "$TARGET/.git" ]; then
-            echo "Erreur: $TARGET existe mais n'est pas un dépôt Git."
-            echo "Par sécurité, rien n'a été supprimé."
+            echo "Erreur: $TARGET existe mais n'est pas un depot Git."
+            echo "Par securite, rien n'a ete supprime."
             exit 1
           fi
 
-          # Ajouter/mettre à jour une remote locale temporaire pointant vers le workspace GitHub Actions
+          # Ajouter/mettre a jour une remote locale temporaire pointant vers le workspace GitHub Actions
           if git -C "$TARGET" remote get-url "$TEMP_REMOTE" >/dev/null 2>&1; then
             git -C "$TARGET" remote set-url "$TEMP_REMOTE" "$SOURCE_REPO"
           else
             git -C "$TARGET" remote add "$TEMP_REMOTE" "$SOURCE_REPO"
           fi
 
-          # Récupérer les branches depuis le workspace sans toucher aux autres repos sous dags
+          # Recuperer les branches depuis le workspace sans toucher aux autres repos sous dags
           git -C "$TARGET" fetch --prune "$TEMP_REMOTE" "+refs/heads/*:refs/remotes/$TEMP_REMOTE/*"
 
-          # Vérifier que la branche attendue existe bien
+          # Verifier que la branche attendue existe bien
           git -C "$TARGET" show-ref --verify --quiet "refs/remotes/$TEMP_REMOTE/$BRANCH" || {
             echo "Erreur: branche $BRANCH introuvable dans la source $SOURCE_REPO"
             exit 1
           }
 
-          # Positionner uniquement le repo cible sur la branche à déployer
+          # Positionner uniquement le repo cible sur la branche a deployer
           git -C "$TARGET" checkout -B "$BRANCH" "$TEMP_REMOTE/$BRANCH"
           git -C "$TARGET" reset --hard "$TEMP_REMOTE/$BRANCH"
           git -C "$TARGET" clean -fd
 
-          echo "Etat final du repo déployé :"
+          echo "Etat final du repo deploye :"
           git -C "$TARGET" status --short --branch
           git -C "$TARGET" rev-parse HEAD
 
-      - name: Copy extract_tnm_by_ipp.py to srvlakehouse
+      - name: Copy extraction scripts to srvlakehouse
         shell: bash
         env:
           SRVLAKEHOUSE_USER: ${{ secrets.SRVLAKEHOUSE_USER }}
@@ -99,20 +99,28 @@ jobs:
         run: |
           set -euo pipefail
 
-          LOCAL_FILE="$GITHUB_WORKSPACE/extract_tnm_stage_by_ipp.py"
           REMOTE_HOST="srvlakehouse"
           REMOTE_DIR="/opt/llm_extract"
-          REMOTE_FILE="$REMOTE_DIR/extract_tnm_stage_by_ipp.py"
+          FILES_TO_COPY=(
+            "extract_tnm_stage_by_ipp.py"
+            "debug_tnm_single_ipp.py"
+            "extract_ipp_files.py"
+          )
 
           [ -n "${SRVLAKEHOUSE_USER:-}" ] || { echo "Erreur: secret SRVLAKEHOUSE_USER manquant"; exit 1; }
           [ -n "${SRVLAKEHOUSE_PASSWORD:-}" ] || { echo "Erreur: secret SRVLAKEHOUSE_PASSWORD manquant"; exit 1; }
-          [ -f "$LOCAL_FILE" ] || { echo "Erreur: fichier source introuvable: $LOCAL_FILE"; exit 1; }
-          command -v sshpass >/dev/null 2>&1 || { echo "Erreur: sshpass n'est pas installé sur le runner"; exit 1; }
-          command -v ssh >/dev/null 2>&1 || { echo "Erreur: ssh n'est pas installé sur le runner"; exit 1; }
-          command -v scp >/dev/null 2>&1 || { echo "Erreur: scp n'est pas installé sur le runner"; exit 1; }
+          command -v sshpass >/dev/null 2>&1 || { echo "Erreur: sshpass n'est pas installe sur le runner"; exit 1; }
+          command -v ssh >/dev/null 2>&1 || { echo "Erreur: ssh n'est pas installe sur le runner"; exit 1; }
+          command -v scp >/dev/null 2>&1 || { echo "Erreur: scp n'est pas installe sur le runner"; exit 1; }
 
           SSH_TARGET="${SRVLAKEHOUSE_USER}@${REMOTE_HOST}"
           SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
           sshpass -p "$SRVLAKEHOUSE_PASSWORD" ssh $SSH_OPTS "$SSH_TARGET" "mkdir -p '$REMOTE_DIR'"
-          sshpass -p "$SRVLAKEHOUSE_PASSWORD" scp $SSH_OPTS "$LOCAL_FILE" "${SSH_TARGET}:${REMOTE_FILE}"
+
+          for file_name in "${FILES_TO_COPY[@]}"; do
+            local_file="$GITHUB_WORKSPACE/$file_name"
+            remote_file="$REMOTE_DIR/$file_name"
+            [ -f "$local_file" ] || { echo "Erreur: fichier source introuvable: $local_file"; exit 1; }
+            sshpass -p "$SRVLAKEHOUSE_PASSWORD" scp $SSH_OPTS "$local_file" "${SSH_TARGET}:${remote_file}"
+          done

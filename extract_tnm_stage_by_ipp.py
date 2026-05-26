@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import csv
@@ -34,6 +34,24 @@ TNM_PATTERN = re.compile(
     r"((?:[cpyra]{0,4})?m(?:x|0|1[abc]?)?)?",
     re.IGNORECASE,
 )
+TNM_LOOSE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])"
+    r"((?:[cpyra]{0,4})?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))"
+    r"(?:[\s\S]{0,120}?)"
+    r"((?:[cpyra]{0,4})?n(?:x|0|1mi|1(?:[abc]|sn)?|2[ab]?|3[abc]?))"
+    r"(?:[\s\S]{0,80}?)"
+    r"((?:[cpyra]{0,4})?m(?:x|0|1[abc]?))",
+    re.IGNORECASE,
+)
+T_TOKEN_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])((?:[cpyra]{0,4})?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+T_IRM_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])((?:[cpyra]{0,4})?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))"
+    r"(?:[\s,;:()\\/-]{0,12})irm\b",
+    re.IGNORECASE,
+)
 T_COMPONENT_PATTERN = re.compile(
     r"(?<![A-Za-z0-9])((?:[cpyra]{0,4})?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))(?![A-Za-z0-9])",
     re.IGNORECASE,
@@ -62,11 +80,33 @@ SURGERY_PATTERN = re.compile(
 CHEMO_PATTERN = re.compile(r"\b(chimiotherap|neoadjuv|adjuv)\b", re.IGNORECASE)
 RADIOTHERAPY_PATTERN = re.compile(r"\b(radiotherap|radiochimiotherap|irradiat|curieth|curietherap)\b", re.IGNORECASE)
 METASTASIS_PATTERN = re.compile(
-    r"\b(metast|oligometast|secondaire[s]?\s+(hepatiq|osseu|pulmon|cerebr|ganglion)|"
-    r"localisation[s]?\s+secondaire[s]?|atteinte\s+metastatique|maladie\s+metastatique)",
+    r"\b(metast|oligometast|secondaire[s]?\s+(hepatiq|osseu|pulmon|cerebr)|"
+    r"atteinte\s+metastatique|maladie\s+metastatique)",
     re.IGNORECASE,
 )
 METASTASIS_NEGATION_PATTERN = re.compile(r"\b(pas\s+de|sans|absence\s+de|aucun(?:e)?|pas\s+d['e])\b", re.IGNORECASE)
+NODAL_POSITIVE_PATTERN = re.compile(
+    r"\b(metastase\s+ganglionnaire|metastases\s+ganglionnaires|adenopathie[s]?\s+secondaire[s]?|"
+    r"envahissement\s+ganglionnaire|atteinte\s+ganglionnaire)\b",
+    re.IGNORECASE,
+)
+REGIONAL_NODAL_CONTEXT_PATTERN = re.compile(
+    r"\b(ganglion(?:naire)?|ad[Ã©e]nom[Ã©e]galie|adenopathie|inguinal|axillaire|iliaque)\b",
+    re.IGNORECASE,
+)
+NO_OTHER_SECONDARY_LOCATION_PATTERN = re.compile(
+    r"\b(pas\s+d['â€™]autre\s+localisation\s+secondaire|pas\s+autre\s+localisation\s+secondaire|"
+    r"aucune?\s+autre\s+localisation\s+secondaire|dedouane?\s+toute\s+localisation\s+secondaire|"
+    r"d[eé]douanant\s+toute\s+localisation\s+secondaire|"
+    r"pas\s+d['’]autre\s+localisation\s+a\s+distance)\b",
+    re.IGNORECASE,
+)
+SECONDARY_LOCATION_NEGATED_PATTERN = re.compile(
+    r"\b(?:aucun(?:e)?|sans|absence\s+de|pas\s+de|pas\s+d['’])\b[\s\S]{0,40}\blocalisation\s+secondaire(?:s)?\b|"
+    r"\blocalisation\s+secondaire(?:s)?\b[\s\S]{0,40}\b(?:aucun(?:e)?|sans|absence\s+de|pas\s+de|pas\s+d['’])\b",
+    re.IGNORECASE,
+)
+ANESTHESIA_DOC_PATTERN = re.compile(r"\bdossier\s+anesth[eé]sie\b", re.IGNORECASE)
 EXPLICIT_STAGE_PATTERN = re.compile(r"\b(?:stade|stage)\s*(?:ajcc\s*)?(0|iv|iii[abc]?|ii[abc]?|i[abc]?|1|2|3|4)\b", re.IGNORECASE)
 DCIS_PATTERN = re.compile(r"\b(ccis|dcis|carcinome\s+canalaire\s+in\s+situ|carcinome\s+intracanalaire)\b", re.IGNORECASE)
 IN_SITU_PATTERN = re.compile(r"\bin\s+situ\b", re.IGNORECASE)
@@ -88,6 +128,11 @@ INVASION_EXCLUSION_PATTERN = re.compile(
 )
 GLEASON_PATTERN = re.compile(
     r"\bgleason\s*(?:score\s*)?(\d{1,2})(?:\s*\(\s*([345])\s*\+\s*([345])\s*\))?",
+    re.IGNORECASE,
+)
+BRESLOW_PATTERN = re.compile(
+    r"(?:\bbreslow(?:\s*(?:de|:|=))?\s*([0-9]+(?:[.,][0-9]+)?)\s*mm\b|"
+    r"\b([0-9]+(?:[.,][0-9]+)?)\s*mm\s+d['â€™][eÃ©]paisseur\s+selon\s+breslow\b)",
     re.IGNORECASE,
 )
 
@@ -133,6 +178,7 @@ class DocumentResult:
     chemo_detected: str
     radiotherapy_detected: str
     metastasis_detected: str
+    stage_confidence: str = "high"
 
 
 @dataclass
@@ -159,6 +205,7 @@ class IppResult:
     documents_seen: int
     documents_with_stage: int
     last_update: str
+    stage_confidence: str = "high"
 
 
 @dataclass
@@ -282,9 +329,15 @@ def detect_signal(pattern: re.Pattern, text: str) -> str:
 
 def detect_metastasis_signal(text: str) -> str:
     for match in METASTASIS_PATTERN.finditer(text):
-        start = max(0, match.start() - 80)
+        start = max(0, match.start() - 180)
+        end = min(len(text), match.end() + 120)
         prefix = text[start:match.start()]
+        around = text[start:end]
         if METASTASIS_NEGATION_PATTERN.search(prefix):
+            continue
+        if SECONDARY_LOCATION_NEGATED_PATTERN.search(around):
+            continue
+        if REGIONAL_NODAL_CONTEXT_PATTERN.search(around) and NO_OTHER_SECONDARY_LOCATION_PATTERN.search(text):
             continue
         return "yes"
     return "no"
@@ -310,6 +363,16 @@ def detect_document_kind(metadata: dict, metadata_path: Path, pdf_path: Path) ->
     if "consult" in haystack or "crcssur" in haystack:
         return "consultation"
     return "other"
+
+
+def is_excluded_document(metadata: dict) -> bool:
+    fields = [
+        str(metadata.get("Document", {}).get("PrescriptionDesc", "")),
+        str(metadata.get("Document", {}).get("TypeDescription", "")),
+        str(metadata.get("Document", {}).get("FormatComDesc", "")),
+    ]
+    haystack = " ".join(fields)
+    return bool(ANESTHESIA_DOC_PATTERN.search(haystack))
 def classify_tnm_context(*tokens: str) -> str:
     prefixes = []
     for token, axis in zip(tokens, ("t", "n", "m")):
@@ -333,6 +396,8 @@ def classify_tnm_context(*tokens: str) -> str:
 
 def normalize_explicit_stage(token: str) -> str:
     token = token.strip().upper()
+    if token == "0":
+        return "Stage I"
     token = {"1": "I", "2": "II", "3": "III", "4": "IV"}.get(token, token)
     return f"Stage {token}"
 
@@ -354,7 +419,7 @@ def infer_stage_zero_from_pathology(text: str, document_kind: str) -> Optional[s
         return None
     if INVASION_EXCLUSION_PATTERN.search(text):
         return None
-    return "Stage 0"
+    return "Stage I"
 
 
 def load_metadata(metadata_path: Path) -> dict:
@@ -426,32 +491,33 @@ def compute_stage(t_value: str, n_value: str, m_value: str) -> str:
     t_norm = t_group(t_value)
     n_norm = n_group(n_value)
     m_norm = m_group(m_value)
+    logic_n = "n0" if n_norm == "nx" else n_norm
     logic_m = "m0" if m_norm == "mx" else m_norm
 
     if logic_m == "m1":
         stage = "Stage IV"
-    elif t_norm == "tis" and n_norm == "n0" and logic_m == "m0":
-        stage = "Stage 0"
-    elif t_norm == "t1" and n_norm == "n0" and logic_m == "m0":
+    elif t_norm == "tis" and logic_n == "n0" and logic_m == "m0":
+        stage = "Stage I"
+    elif t_norm == "t1" and logic_n == "n0" and logic_m == "m0":
         stage = "Stage I"
     elif (
-        (t_norm in {"t0", "t1"} and n_norm in {"n1mi", "n1"})
-        or (t_norm == "t2" and n_norm == "n0")
+        (t_norm in {"t0", "t1"} and logic_n in {"n1mi", "n1"})
+        or (t_norm == "t2" and logic_n == "n0")
     ) and logic_m == "m0":
         stage = "Stage IIA"
     elif (
-        (t_norm == "t2" and n_norm == "n1")
-        or (t_norm == "t3" and n_norm == "n0")
+        (t_norm == "t2" and logic_n == "n1")
+        or (t_norm == "t3" and logic_n == "n0")
     ) and logic_m == "m0":
         stage = "Stage IIB"
     elif (
-        (t_norm in {"t0", "t1", "t2"} and n_norm == "n2")
-        or (t_norm == "t3" and n_norm in {"n1", "n1mi", "n2"})
+        (t_norm in {"t0", "t1", "t2"} and logic_n == "n2")
+        or (t_norm == "t3" and logic_n in {"n1", "n1mi", "n2"})
     ) and logic_m == "m0":
         stage = "Stage IIIA"
-    elif t_norm == "t4" and n_norm in {"n0", "n1", "n2"} and logic_m == "m0":
+    elif t_norm == "t4" and logic_n in {"n0", "n1", "n2"} and logic_m == "m0":
         stage = "Stage IIIB"
-    elif n_norm == "n3" and logic_m == "m0":
+    elif logic_n == "n3" and logic_m == "m0":
         stage = "Stage IIIC"
     else:
         stage = NULL_VALUE
@@ -465,11 +531,24 @@ def extract_tnm_candidates(text: str, ipp_meta: Optional[IppMetadata]) -> list[T
     candidates: list[TnmCandidate] = []
     seen: set[tuple[str, str, str]] = set()
 
-    for match in TNM_PATTERN.finditer(text):
+    strict_matches = list(TNM_PATTERN.finditer(text))
+    use_loose_fallback = not strict_matches
+    pattern_matches = strict_matches if strict_matches else list(TNM_LOOSE_PATTERN.finditer(text))
+    for match in pattern_matches:
         raw = re.sub(r"\s+", " ", match.group(0)).strip()
         t_token = match.group(1) or ""
         n_token = match.group(2) or ""
         m_token = match.group(3) or ""
+
+        if use_loose_fallback:
+            irm_t_candidates = [candidate.group(1) for candidate in T_IRM_PATTERN.finditer(raw)]
+            if irm_t_candidates:
+                t_token = irm_t_candidates[-1]
+            else:
+                all_t_candidates = [candidate.group(1) for candidate in T_TOKEN_PATTERN.finditer(raw)]
+                if all_t_candidates:
+                    t_token = all_t_candidates[-1]
+
         t_value = normalize_tnm_component(t_token, "t")
         n_value = normalize_tnm_component(n_token, "n")
         m_value = normalize_tnm_component(m_token, "m")
@@ -627,6 +706,55 @@ def extract_axis_values(text: str, pattern: re.Pattern, axis: str) -> list[str]:
     return values
 
 
+def parse_breslow_mm(raw_value: str) -> Optional[float]:
+    token = (raw_value or "").strip().replace(",", ".")
+    if not token:
+        return None
+    if "." not in token and token.startswith("0") and len(token) > 1:
+        return int(token) / (10 ** (len(token) - 1))
+    try:
+        return float(token)
+    except ValueError:
+        return None
+
+
+def extract_breslow_raw_value(match: re.Match) -> Optional[str]:
+    return match.group(1) or match.group(2)
+
+
+def breslow_t_category(mm: float) -> str:
+    if mm <= 1.0:
+        return "t1"
+    if mm <= 2.0:
+        return "t2"
+    if mm <= 4.0:
+        return "t3"
+    return "t4"
+
+
+def extract_breslow_stage(text: str) -> Optional[tuple[str, str, str, str]]:
+    values: list[tuple[float, str]] = []
+    for match in BRESLOW_PATTERN.finditer(text):
+        raw_value = extract_breslow_raw_value(match)
+        if raw_value is None:
+            continue
+        mm = parse_breslow_mm(raw_value)
+        if mm is None:
+            continue
+        values.append((mm, re.sub(r"\s+", " ", match.group(0)).strip()))
+    if not values:
+        return None
+
+    mm, raw = max(values, key=lambda item: item[0])
+    t_value = breslow_t_category(mm)
+    n_value = "n0"
+    m_value = "m0"
+    stage = compute_stage(t_value, n_value, m_value)
+    if stage == NULL_VALUE:
+        return None
+    return raw, t_value, n_value, m_value
+
+
 def reconstruct_same_document_tnm(text: str) -> Optional[tuple[str, str, str, str]]:
     t_values = extract_axis_values(text, T_COMPONENT_PATTERN, "t")
     n_values = extract_axis_values(text, N_COMPONENT_PATTERN, "n")
@@ -719,6 +847,33 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
     visit_number = metadata_to_visit_number(metadata)
     pdf_path = metadata_to_pdf_path(metadata_path)
     document_kind = detect_document_kind(metadata, metadata_path, pdf_path)
+
+    if is_excluded_document(metadata):
+        return DocumentResult(
+            ipp=ipp,
+            metadata_file=str(metadata_path),
+            pdf_file=str(pdf_path),
+            document_date=document_date,
+            visit_number=visit_number,
+            text_length=0,
+            tnm_raw=NULL_VALUE,
+            t=NULL_VALUE,
+            n=NULL_VALUE,
+            m=NULL_VALUE,
+            stage=NULL_VALUE,
+            status="filtered_out",
+            reason="Document excluded: Dossier Anesthesie",
+            all_tnm_matches="",
+            document_kind=document_kind,
+            tnm_context="excluded",
+            treatment_detected="no",
+            treatment_keywords="",
+            surgery_detected="no",
+            chemo_detected="no",
+            radiotherapy_detected="no",
+            metastasis_detected="no",
+            stage_confidence="high",
+        )
 
     if not pdf_path.exists():
         return DocumentResult(
@@ -892,6 +1047,34 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
                 all_tnm_matches="",
                 document_kind=document_kind,
                 tnm_context="unknown",
+                treatment_detected=treatment_detected,
+                treatment_keywords=treatment_keywords,
+                surgery_detected=surgery_detected,
+                chemo_detected=chemo_detected,
+                radiotherapy_detected=radiotherapy_detected,
+                metastasis_detected=metastasis_detected,
+            )
+
+        breslow_stage = extract_breslow_stage(text)
+        if breslow_stage is not None:
+            raw_breslow, t_value, n_value, m_value = breslow_stage
+            return DocumentResult(
+                ipp=ipp,
+                metadata_file=str(metadata_path),
+                pdf_file=str(pdf_path),
+                document_date=document_date,
+                visit_number=visit_number,
+                text_length=len(text),
+                tnm_raw=raw_breslow,
+                t=t_value,
+                n=n_value,
+                m=m_value,
+                stage=compute_stage(t_value, n_value, m_value),
+                status="stage_found",
+                reason="Stage inferred from Breslow thickness fallback",
+                all_tnm_matches="",
+                document_kind=document_kind,
+                tnm_context="breslow_fallback",
                 treatment_detected=treatment_detected,
                 treatment_keywords=treatment_keywords,
                 surgery_detected=surgery_detected,
@@ -1181,6 +1364,7 @@ def build_ipp_result(
         documents_seen=len(rows),
         documents_with_stage=documents_with_stage,
         last_update=run_timestamp,
+        stage_confidence=chosen.stage_confidence,
     )
 
 
@@ -1267,6 +1451,15 @@ def main() -> int:
                 Path(result.pdf_file).name,
             )
 
+            if args.ipp_strategy == "baseline" and result.stage != NULL_VALUE:
+                LOGGER.info(
+                    "  baseline early-stop | first stage found at date=%s | stage=%s | file=%s",
+                    result.document_date,
+                    result.stage,
+                    Path(result.pdf_file).name,
+                )
+                break
+
         ipp_total_matches = sum(document_match_count(row) for row in document_results)
         ipp_docs_with_match = sum(1 for row in document_results if document_match_count(row) > 0)
         running_total_matches += ipp_total_matches
@@ -1310,3 +1503,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
