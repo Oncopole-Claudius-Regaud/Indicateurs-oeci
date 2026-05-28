@@ -179,6 +179,10 @@ def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=No
     hook = get_postgres_hook(conn_id)
     FULL_TABLE_PATH = "datamart_oeci_survie.v_statut_vital"
     date_diag_min = _normalize_observation_start_date(date_debut_obs)
+    date_diag_max = pd.to_datetime(str(date_fin_obs).strip(), errors="coerce")
+    if pd.isna(date_diag_max):
+        raise ValueError("Parametre 'date_fin_obs' invalide. Format attendu: 'YYYY-MM-DD'.")
+    date_diag_max = date_diag_max.strftime("%Y-%m-%d")
 
     query = f"""
     SELECT
@@ -196,6 +200,7 @@ def extract_and_clean_data_task(organe, date_debut_obs, date_fin_obs, conn_id=No
       AND v.code_cim IS NOT NULL
       AND COALESCE(v.date_diag_tkc, v.date_diag_dcc) IS NOT NULL
       AND COALESCE(v.date_diag_tkc, v.date_diag_dcc)::date >= DATE '{date_diag_min}'
+      AND COALESCE(v.date_diag_tkc, v.date_diag_dcc)::date <= DATE '{date_diag_max}'
     ;
     """
 

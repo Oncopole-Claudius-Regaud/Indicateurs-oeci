@@ -6,10 +6,12 @@ import json
 import logging
 import re
 import sys
+import types
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
+import debug_tnm_single_ipp as debug_engine
 
 try:
     import fitz  # type: ignore
@@ -23,6 +25,7 @@ except ImportError:  # pragma: no cover
 
 
 LOGGER = logging.getLogger("tnm_stage")
+VERSION_FLAG = "STABLE"
 NULL_VALUE = "null"
 
 TNM_PATTERN = re.compile(
@@ -61,7 +64,7 @@ N_COMPONENT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 M_COMPONENT_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9])((?:[cpyra]{0,4})?m(?:x|0|1[abc]?)?)(?![A-Za-z0-9])",
+    r"(?<![A-Za-z0-9])((?:[cpyra]{0,4})?m(?:x|0|1[abc]?))(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
 TREATMENT_PATTERN = re.compile(
@@ -80,34 +83,142 @@ SURGERY_PATTERN = re.compile(
 CHEMO_PATTERN = re.compile(r"\b(chimiotherap|neoadjuv|adjuv)\b", re.IGNORECASE)
 RADIOTHERAPY_PATTERN = re.compile(r"\b(radiotherap|radiochimiotherap|irradiat|curieth|curietherap)\b", re.IGNORECASE)
 METASTASIS_PATTERN = re.compile(
-    r"\b(metast|oligometast|secondaire[s]?\s+(hepatiq|osseu|pulmon|cerebr)|"
-    r"atteinte\s+metastatique|maladie\s+metastatique)",
+    r"\b(m[ée]tast|oligom[ée]tast|secondaire[s]?\s+(hepatiq|osseu|pulmon|cerebr)|"
+    r"atteinte\s+m[ée]tastatique|maladie\s+m[ée]tastatique)",
     re.IGNORECASE,
 )
-METASTASIS_NEGATION_PATTERN = re.compile(r"\b(pas\s+de|sans|absence\s+de|aucun(?:e)?|pas\s+d['e])\b", re.IGNORECASE)
+METASTASIS_NEGATION_PATTERN = re.compile(
+    r"\b(pas\s+de|sans|absence\s+de|aucun(?:e)?|pas\s+d['e])\b",
+    re.IGNORECASE,
+)
+METASTASIS_FIELD_NEGATION_PATTERN = re.compile(
+    r"\bm[ée]tastas?(?:e|es|ique|iques)?\b\s*[:=-]\s*non\b",
+    re.IGNORECASE,
+)
+METASTASIS_FORM_LABEL_PATTERN = re.compile(
+    r"\btype\s+histologique\s*\(\s*primitif\s*,\s*m[ée]tastase\s+et\s+origine\s*\)\s*:\s*primitif\b",
+    re.IGNORECASE,
+)
+METASTASIS_LOCAL_NEGATION_PATTERN = re.compile(
+    r"\b(non|pas\s+de|sans|absence\s+de|aucun(?:e)?)\b",
+    re.IGNORECASE,
+)
+RCP_CARTOUCHE_PATTERN = re.compile(
+    r"\brcp\s+sein\s+diagnostique\b[\s\S]{0,160}\brcp\s+sein\s+post\s+chirurgical\b[\s\S]{0,160}\brcp\s+sein\s+m[ée]tastatique\b",
+    re.IGNORECASE,
+)
+SERVICE_MENU_METASTASIS_PATTERN = re.compile(
+    r"\b(pathologie\s+thyro[iï]dienne|tumeurs?\s+neuro[\s-]?endocrines?|h[ée]mopathies|m[ée]tastases?\s+osseuses)\b",
+    re.IGNORECASE,
+)
+METASTASIS_EXPLICIT_NEGATIVE_CONTEXT_PATTERN = re.compile(
+    r"\b(?:absence\s+de|sans|pas\s+de|aucun(?:e)?)\b[\s\S]{0,60}\bmetast",
+    re.IGNORECASE,
+)
 NODAL_POSITIVE_PATTERN = re.compile(
     r"\b(metastase\s+ganglionnaire|metastases\s+ganglionnaires|adenopathie[s]?\s+secondaire[s]?|"
     r"envahissement\s+ganglionnaire|atteinte\s+ganglionnaire)\b",
     re.IGNORECASE,
 )
+NODAL_NEGATIVE_PATTERN = re.compile(
+    r"\b(absence\s+de\s+metastase\s+ganglionnaire|sans\s+metastase\s+ganglionnaire|"
+    r"ganglion\s+sentinelle\s+negatif|pas\s+de\s+metastase\s+ganglionnaire|"
+    r"aucune?\s+metastase\s+ganglionnaire|0\s*/\s*[1-9]\d*|"
+    r"pas\s+mis\s+en\s+[eé]vidence\s+(?:d['']\s*|de\s+)ad[ée]nom[ée]galie(?:s)?(?:\s+axillaire(?:s)?)?|"
+    r"ganglion(?:naire)?s?[\s\S]{0,80}sans\s+[eé]l[eé]ment\s+suspect|"
+    r"aires?\s+ganglionnaires?\s+axillaires?\s+vierges?)\b",
+    re.IGNORECASE,
+)
+NODAL_NEGATION_PATTERN = re.compile(r"\b(pas\s+de|sans|absence\s+de|aucun(?:e)?)\b", re.IGNORECASE)
+PROSTATE_CONTEXT_PATTERN = re.compile(r"\b(prostate|prostatique)\b", re.IGNORECASE)
+MELANOMA_CONTEXT_PATTERN = re.compile(r"\b(m[ée]lanome|breslow|clark|ssm)\b", re.IGNORECASE)
+MELANOMA_WEAK_CERTAINTY_PATTERN = re.compile(
+    r"\b(suspicion|suspecte?|possible|probable|douteux|douteuse|compatible\s+avec|[àa]\s+contr[oô]ler)\b",
+    re.IGNORECASE,
+)
+MELANOMA_EXCLUSION_PATTERN = re.compile(
+    r"\b(r[ée]actionnel|inflammatoire|stable\s+non\s+suspect|non\s+suspect|b[ée]nin|cicatriciel|post[\s-]?op[ée]ratoire|post[\s-]?th[ée]rapeutique)\b",
+    re.IGNORECASE,
+)
+MELANOMA_NON_REGIONAL_NODAL_PATTERN = re.compile(
+    r"\b(m[ée]diastin|hilaire|r[ée]tro[\s-]?p[ée]riton|lombo[\s-]?aort|para[\s-]?aort|ganglion\s+non\s+r[ée]gional|ad[ée]nopathie\s+[àa]\s+distance)\b",
+    re.IGNORECASE,
+)
+MELANOMA_TRANSIT_SATELLITE_PATTERN = re.compile(
+    r"\b(microsatellite|microsatellites|m[ée]tastase[s]?\s+satellite[s]?|nodule[s]?\s+satellite[s]?|m[ée]tastase[s]?\s+en\s+transit|l[ée]sion[s]?\s+en\s+transit|in[\s-]?transit)\b",
+    re.IGNORECASE,
+)
+MELANOMA_METASTASIS_CONFIRMED_PATTERN = re.compile(
+    r"\b("
+    r"hyperfixation|pet[\s-]?scanner|pet[\s-]?scan|"
+    r"nodule[s]?\s+pulmonaire[s]?\s+(se\s+major|confirm|m[ée]tastat|malin|maligne|suspect)|"
+    r"[ée]volutivit[eé]\s+pulmonaire|"
+    r"m[ée]tastase[s]?\s+pulmonaire[s]?|"
+    r"atteinte\s+m[ée]tastatique\s+(pulmonaire|h[eé]patique|osseuse|c[eé]r[eé]brale|visc[eé]rale)|"
+    r"bilan\s+d['']extension\s+positif|"
+    r"progression\s+m[ée]tastatique"
+    r")\b",
+    re.IGNORECASE,
+)
+MELANOMA_SURVEILLANCE_PATTERN = re.compile(
+    r"\b("
+    r"surveillance|r[eé]mission\s+compl[eè]te|contr[oô]le|suivi|"
+    r"pas\s+de\s+signe\s+de\s+r[eé]cidive|absence\s+de\s+r[eé]cidive|"
+    r"en\s+r[eé]mission|r[eé]mission\s+maintenue"
+    r")\b",
+    re.IGNORECASE,
+)
+IMAGING_EVIDENCE_PATTERN = re.compile(
+    r"\b(scanner|irm|pet[\s-]?scan|pet[\s-]?scanner|tep|imagerie|bilan\s+d['']extension|echo(graphie)?)\b",
+    re.IGNORECASE,
+)
+ULCERATION_PATTERN = re.compile(
+    r"\b(ulc[eé]r[eé]|largement\s+ulc[eé]r[eé]|ulc[eé]ration)\b",
+    re.IGNORECASE,
+)
 REGIONAL_NODAL_CONTEXT_PATTERN = re.compile(
-    r"\b(ganglion(?:naire)?|ad[Ã©e]nom[Ã©e]galie|adenopathie|inguinal|axillaire|iliaque)\b",
+    r"\b(ganglion(?:naire)?|ad[ée]nom[ée]galie|adenopathie|inguinal|axillaire|iliaque)\b",
+    re.IGNORECASE,
+)
+DISTANT_SECONDARY_SITE_PATTERN = re.compile(
+    r"\b(secondaire[s]?\s+(hepatiq|osseu|pulmon|cerebr)|a\s+distance|visceral(?:e|es)?)\b",
+    re.IGNORECASE,
+)
+BREAST_REGIONAL_NODAL_MET_PATTERN = re.compile(
+    r"\b(m[ée]tastase[s]?\s+ganglionnaire[s]?)\b[\s\S]{0,80}\b(axillaire[s]?|sus[\s-]?claviculaire[s]?|"
+    r"sous[\s-]?claviculaire[s]?|mammaire[s]?\s+interne[s]?|sentinelle[s]?)\b|"
+    r"\b(axillaire[s]?|sus[\s-]?claviculaire[s]?|sous[\s-]?claviculaire[s]?|"
+    r"mammaire[s]?\s+interne[s]?|sentinelle[s]?)\b[\s\S]{0,80}\b(m[ée]tastase[s]?\s+ganglionnaire[s]?)\b",
+    re.IGNORECASE,
+)
+BREAST_DISTANT_METASTASIS_PATTERN = re.compile(
+    r"\b(m1[abc]?|m[ée]tastase[s]?\s+(h[ée]patique[s]?|pulmonaire[s]?|osseuse[s]?|c[eé]r[eé]brale[s]?|"
+    r"visc[ée]rale[s]?|p[eé]riton[ée]ale[s]?|pleurale[s]?)|localisation\s+[àa]\s+distance|"
+    r"ad[ée]nopathie[s]?\s+[àa]\s+distance|ganglion\s+non\s+r[ée]gional)\b",
     re.IGNORECASE,
 )
 NO_OTHER_SECONDARY_LOCATION_PATTERN = re.compile(
-    r"\b(pas\s+d['â€™]autre\s+localisation\s+secondaire|pas\s+autre\s+localisation\s+secondaire|"
+    r"\b(pas\s+d['']autre\s+localisation\s+secondaire|pas\s+autre\s+localisation\s+secondaire|"
     r"aucune?\s+autre\s+localisation\s+secondaire|dedouane?\s+toute\s+localisation\s+secondaire|"
     r"d[eé]douanant\s+toute\s+localisation\s+secondaire|"
-    r"pas\s+d['’]autre\s+localisation\s+a\s+distance)\b",
+    r"pas\s+d['']autre\s+localisation\s+a\s+distance)\b",
     re.IGNORECASE,
 )
 SECONDARY_LOCATION_NEGATED_PATTERN = re.compile(
-    r"\b(?:aucun(?:e)?|sans|absence\s+de|pas\s+de|pas\s+d['’])\b[\s\S]{0,40}\blocalisation\s+secondaire(?:s)?\b|"
-    r"\blocalisation\s+secondaire(?:s)?\b[\s\S]{0,40}\b(?:aucun(?:e)?|sans|absence\s+de|pas\s+de|pas\s+d['’])\b",
+    r"\b(?:aucun(?:e)?|sans|absence\s+de|pas\s+de|pas\s+d[''])\b[\s\S]{0,40}\blocalisation\s+secondaire(?:s)?\b|"
+    r"\blocalisation\s+secondaire(?:s)?\b[\s\S]{0,40}\b(?:aucun(?:e)?|sans|absence\s+de|pas\s+de|pas\s+d[''])\b",
     re.IGNORECASE,
 )
 ANESTHESIA_DOC_PATTERN = re.compile(r"\bdossier\s+anesth[eé]sie\b", re.IGNORECASE)
 EXPLICIT_STAGE_PATTERN = re.compile(r"\b(?:stade|stage)\s*(?:ajcc\s*)?(0|iv|iii[abc]?|ii[abc]?|i[abc]?|1|2|3|4)\b", re.IGNORECASE)
+EXPLICIT_STAGE_FALSE_POSITIVE_PATTERN = re.compile(
+    r"\b(ptose(?:\s+mammaire)?|oms)\b",
+    re.IGNORECASE,
+)
+EXPLICIT_STAGE_ONCO_CONTEXT_PATTERN = re.compile(
+    r"\b(cancer|carcinom|tumeur|oncolog|tnm|ajcc|m[ée]tast|invasi|ad[ée]nocarcinom)\b",
+    re.IGNORECASE,
+)
 DCIS_PATTERN = re.compile(r"\b(ccis|dcis|carcinome\s+canalaire\s+in\s+situ|carcinome\s+intracanalaire)\b", re.IGNORECASE)
 IN_SITU_PATTERN = re.compile(r"\bin\s+situ\b", re.IGNORECASE)
 NO_INVASION_PATTERN = re.compile(
@@ -132,7 +243,22 @@ GLEASON_PATTERN = re.compile(
 )
 BRESLOW_PATTERN = re.compile(
     r"(?:\bbreslow(?:\s*(?:de|:|=))?\s*([0-9]+(?:[.,][0-9]+)?)\s*mm\b|"
-    r"\b([0-9]+(?:[.,][0-9]+)?)\s*mm\s+d['â€™][eÃ©]paisseur\s+selon\s+breslow\b)",
+    r"\b([0-9]+(?:[.,][0-9]+)?)\s*mm\s+d[''][eé]paisseur\s+selon\s+breslow\b)",
+    re.IGNORECASE,
+)
+BREAST_CONTEXT_PATTERN = re.compile(
+    r"\b(sein|mammaire|s[eé]nologie|mastectomie|tumorectomie|quadrantectomie|"
+    r"carcinome\s+canalaire|carcinome\s+lobulaire|her2|recepteur\s+(estrog|progest)|"
+    r"grade\s+(sbr|eln)|ganglion\s+sentinelle\s+axillaire)\b",
+    re.IGNORECASE,
+)
+BREAST_PATHOLOGICAL_TNM_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])"
+    r"(p\s*t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))"
+    r"(?:\s*[/,;:=-]?\s*)"
+    r"(p?\s*n(?:x|0|1mi|1(?:[abc]|sn)?|2[ab]?|3[abc]?))"
+    r"(?:\s*[/,;:=-]?\s*)"
+    r"(p?\s*m(?:x|0|1[abc]?))?",
     re.IGNORECASE,
 )
 
@@ -142,6 +268,8 @@ class IppMetadata:
     ipp: str
     organe: str
     code_cim: str
+    date_diag_tkc: str = ""
+    date_diag_dcc: str = ""
 
 
 @dataclass
@@ -255,6 +383,8 @@ def load_ipp_metadata_map(path: Optional[str]) -> dict[str, IppMetadata]:
             ipp=ipp,
             organe=str(row.get("organe") or "").strip(),
             code_cim=str(row.get("code_cim") or "").strip(),
+            date_diag_tkc=str(row.get("date_diag_tkc") or "").strip(),
+            date_diag_dcc=str(row.get("date_diag_dcc") or "").strip(),
         )
     return mapping
 
@@ -333,14 +463,96 @@ def detect_metastasis_signal(text: str) -> str:
         end = min(len(text), match.end() + 120)
         prefix = text[start:match.start()]
         around = text[start:end]
+        around_wide = text[max(0, match.start() - 420):min(len(text), match.end() + 420)]
+        if RCP_CARTOUCHE_PATTERN.search(around_wide):
+            continue
+        if len(SERVICE_MENU_METASTASIS_PATTERN.findall(around_wide)) >= 2:
+            continue
         if METASTASIS_NEGATION_PATTERN.search(prefix):
             continue
+        if METASTASIS_LOCAL_NEGATION_PATTERN.search(around):
+            continue
+        if METASTASIS_FIELD_NEGATION_PATTERN.search(around):
+            continue
+        if METASTASIS_FORM_LABEL_PATTERN.search(around):
+            continue
+        if METASTASIS_EXPLICIT_NEGATIVE_CONTEXT_PATTERN.search(around):
+            continue
         if SECONDARY_LOCATION_NEGATED_PATTERN.search(around):
+            continue
+        # Regional nodal metastatic wording should not be promoted to Stage IV
+        # unless there is an explicit distant-secondary context.
+        if REGIONAL_NODAL_CONTEXT_PATTERN.search(around) and not DISTANT_SECONDARY_SITE_PATTERN.search(around):
             continue
         if REGIONAL_NODAL_CONTEXT_PATTERN.search(around) and NO_OTHER_SECONDARY_LOCATION_PATTERN.search(text):
             continue
         return "yes"
     return "no"
+
+
+def is_breast_regional_nodal_only_metastasis(text: str) -> bool:
+    if not BREAST_CONTEXT_PATTERN.search(text):
+        return False
+    if not BREAST_REGIONAL_NODAL_MET_PATTERN.search(text):
+        return False
+    if DISTANT_SECONDARY_SITE_PATTERN.search(text):
+        return False
+    return True
+
+
+def breast_has_distant_metastasis_signal(text: str) -> bool:
+    return bool(DISTANT_SECONDARY_SITE_PATTERN.search(text) or BREAST_DISTANT_METASTASIS_PATTERN.search(text))
+
+
+def detect_nodal_positive_signal(text: str) -> str:
+    for match in NODAL_POSITIVE_PATTERN.finditer(text):
+        start = max(0, match.start() - 120)
+        prefix = text[start:match.start()]
+        if NODAL_NEGATION_PATTERN.search(prefix):
+            continue
+        return "yes"
+    return "no"
+
+
+def detect_imaging_evidence(text: str, document_kind: str) -> bool:
+    return document_kind == "radiology" or bool(IMAGING_EVIDENCE_PATTERN.search(text))
+
+
+def detect_melanoma_nodal_signal(text: str) -> str:
+    if MELANOMA_NON_REGIONAL_NODAL_PATTERN.search(text):
+        return "non_regional"
+    if MELANOMA_TRANSIT_SATELLITE_PATTERN.search(text):
+        return "positive"
+    if detect_nodal_positive_signal(text) == "yes":
+        return "positive"
+    return "unknown"
+
+
+def detect_melanoma_metastasis_confirmed(text: str) -> bool:
+    if MELANOMA_SURVEILLANCE_PATTERN.search(text):
+        past_markers = re.compile(
+            r"\b(en\s+2\d{3}|trait[eé]\s+par|a\s+[eé]t[eé]|ancienne|ant[eé]rieure?|anciennement)\b",
+            re.IGNORECASE,
+        )
+        for match in MELANOMA_METASTASIS_CONFIRMED_PATTERN.finditer(text):
+            window_start = max(0, match.start() - 200)
+            context = text[window_start:match.end() + 100]
+            if MELANOMA_WEAK_CERTAINTY_PATTERN.search(context):
+                continue
+            if MELANOMA_EXCLUSION_PATTERN.search(context):
+                continue
+            if past_markers.search(context):
+                continue
+            return True
+        return False
+    for match in MELANOMA_METASTASIS_CONFIRMED_PATTERN.finditer(text):
+        context = text[max(0, match.start() - 200):min(len(text), match.end() + 100)]
+        if MELANOMA_WEAK_CERTAINTY_PATTERN.search(context):
+            continue
+        if MELANOMA_EXCLUSION_PATTERN.search(context):
+            continue
+        return True
+    return False
 
 
 def detect_document_kind(metadata: dict, metadata_path: Path, pdf_path: Path) -> str:
@@ -360,6 +572,8 @@ def detect_document_kind(metadata: dict, metadata_path: Path, pdf_path: Path) ->
         return "rcp"
     if "anapath" in haystack or "path" in haystack or "anatomo" in haystack:
         return "pathology"
+    if any(k in haystack for k in ("scanner", "scannercr", "irm", "pet", "echograph", "radio", "imagerie")):
+        return "radiology"
     if "consult" in haystack or "crcssur" in haystack:
         return "consultation"
     return "other"
@@ -406,6 +620,13 @@ def extract_explicit_stage(text: str) -> Optional[str]:
     match = EXPLICIT_STAGE_PATTERN.search(text)
     if not match:
         return None
+    window_start = max(0, match.start() - 80)
+    window_end = min(len(text), match.end() + 80)
+    window = text[window_start:window_end]
+    if EXPLICIT_STAGE_FALSE_POSITIVE_PATTERN.search(window):
+        return None
+    if not EXPLICIT_STAGE_ONCO_CONTEXT_PATTERN.search(window):
+        return None
     return normalize_explicit_stage(match.group(1))
 
 
@@ -448,7 +669,27 @@ def metadata_to_ipp(metadata: dict, metadata_path: Path) -> str:
     return ipp or NULL_VALUE
 
 
-def metadata_to_date(metadata: dict) -> str:
+FILENAME_DATE_PATTERN = re.compile(r"_(\d{8})(?:_\d+)?\.pdf$", re.IGNORECASE)
+
+
+def extract_date_from_filename(filename: str) -> Optional[str]:
+    match = FILENAME_DATE_PATTERN.search(filename)
+    if not match:
+        return None
+    value = match.group(1)
+    year = int(value[:4])
+    month = int(value[4:6])
+    day = int(value[6:8])
+    if 2000 <= year <= 2100 and 1 <= month <= 12 and 1 <= day <= 31:
+        return value
+    return None
+
+
+def metadata_to_date(metadata: dict, pdf_path: Optional[Path] = None) -> str:
+    if pdf_path is not None:
+        file_date = extract_date_from_filename(pdf_path.name)
+        if file_date:
+            return file_date
     for value in (
         metadata.get("Episode", {}).get("StartDate"),
         metadata.get("Document", {}).get("CreateDate"),
@@ -525,6 +766,44 @@ def compute_stage(t_value: str, n_value: str, m_value: str) -> str:
     if stage != NULL_VALUE and m_norm == "mx":
         return f"{stage} (Mx)"
     return stage
+
+
+def compute_melanoma_stage(t_value: str, n_value: str, m_value: str, ulcerated: bool) -> str:
+    t = normalize_tnm_component(t_value, "t")
+    n = normalize_tnm_component(n_value, "n")
+    m = normalize_tnm_component(m_value, "m") or "mx"
+    logic_n = "n0" if n == "nx" else n
+    logic_m = m
+
+    if logic_m == "mx":
+        return NULL_VALUE
+    if logic_m.startswith("m1"):
+        return "Stage IV"
+    if t == "tis":
+        return "Stage 0"
+    if t in {"t1", "t1a"}:
+        return "Stage IA" if logic_n == "n0" else "Stage IIIA"
+    if t == "t1b":
+        return "Stage IB" if logic_n == "n0" else "Stage IIIA"
+    if t in {"t2", "t2a"}:
+        return "Stage IB" if logic_n == "n0" else "Stage IIIA"
+    if t == "t2b":
+        return "Stage IIA" if logic_n == "n0" else "Stage IIIB"
+    if t in {"t3", "t3a"}:
+        return "Stage IIA" if logic_n == "n0" else "Stage IIIB"
+    if t == "t3b":
+        return "Stage IIB" if logic_n == "n0" else "Stage IIIB"
+    if t in {"t4", "t4a"}:
+        return "Stage IIB" if logic_n == "n0" else "Stage IIIB"
+    if t == "t4b":
+        if logic_n == "n0":
+            return "Stage IIC"
+        if logic_n in {"n1", "n1a", "n1b", "n2", "n2a", "n2b"}:
+            return "Stage IIIB"
+        if logic_n in {"n3", "n3a", "n3b", "n3c"}:
+            return "Stage IIIC"
+        return "Stage IIIB"
+    return compute_stage(t_value, n_value, m_value)
 
 
 def extract_tnm_candidates(text: str, ipp_meta: Optional[IppMetadata]) -> list[TnmCandidate]:
@@ -722,17 +1001,25 @@ def extract_breslow_raw_value(match: re.Match) -> Optional[str]:
     return match.group(1) or match.group(2)
 
 
-def breslow_t_category(mm: float) -> str:
+def breslow_t_category_with_ulceration(mm: float, ulcerated: bool) -> str:
     if mm <= 1.0:
-        return "t1"
+        return "t1b" if ulcerated else "t1a"
     if mm <= 2.0:
-        return "t2"
+        return "t2b" if ulcerated else "t2a"
     if mm <= 4.0:
-        return "t3"
-    return "t4"
+        return "t3b" if ulcerated else "t3a"
+    return "t4b" if ulcerated else "t4a"
 
 
-def extract_breslow_stage(text: str) -> Optional[tuple[str, str, str, str]]:
+def infer_n_from_nodal_context(text: str) -> str:
+    has_negative = bool(NODAL_NEGATIVE_PATTERN.search(text))
+    has_positive = bool(NODAL_POSITIVE_PATTERN.search(text))
+    if has_negative and not has_positive:
+        return "n0"
+    return "nx"
+
+
+def extract_breslow_stage(text: str, ulcerated: bool, m_value: str) -> Optional[tuple[str, str, str, str, str]]:
     values: list[tuple[float, str]] = []
     for match in BRESLOW_PATTERN.finditer(text):
         raw_value = extract_breslow_raw_value(match)
@@ -746,13 +1033,12 @@ def extract_breslow_stage(text: str) -> Optional[tuple[str, str, str, str]]:
         return None
 
     mm, raw = max(values, key=lambda item: item[0])
-    t_value = breslow_t_category(mm)
-    n_value = "n0"
-    m_value = "m0"
-    stage = compute_stage(t_value, n_value, m_value)
+    t_value = breslow_t_category_with_ulceration(mm, ulcerated)
+    n_value = infer_n_from_nodal_context(text)
+    stage = compute_melanoma_stage(t_value, n_value, m_value, ulcerated)
     if stage == NULL_VALUE:
         return None
-    return raw, t_value, n_value, m_value
+    return raw, t_value, n_value, m_value, stage
 
 
 def reconstruct_same_document_tnm(text: str) -> Optional[tuple[str, str, str, str]]:
@@ -774,8 +1060,94 @@ def reconstruct_same_document_tnm(text: str) -> Optional[tuple[str, str, str, st
     return t_value, n_value, m_value, stage
 
 
+def extract_prostate_t_only_stage(text: str, metastasis_detected: str) -> Optional[tuple[str, str, str, str, str]]:
+    if not PROSTATE_CONTEXT_PATTERN.search(text):
+        return None
+    if metastasis_detected == "yes":
+        return None
+    if detect_nodal_positive_signal(text) == "yes":
+        return None
+
+    irm_t_candidates = [normalize_tnm_component(item.group(1), "t") for item in T_IRM_PATTERN.finditer(text)]
+    t_values = [value for value in irm_t_candidates if value and value not in {"tx"}]
+    if not t_values:
+        all_t_values = extract_axis_values(text, T_COMPONENT_PATTERN, "t")
+        t_values = [value for value in all_t_values if value and value not in {"tx"}]
+    if not t_values:
+        return None
+
+    t_value = max(t_values, key=t_component_rank)
+    n_value = "n0"
+    m_value = "m0"
+    stage = compute_stage(t_value, n_value, m_value)
+    if stage == NULL_VALUE:
+        return None
+
+    raw = f"{t_value.upper()} (prostate inferred N0M0)"
+    return raw, t_value, n_value, m_value, stage
+
+
 def parse_date_sort_key(value: str) -> str:
     return value if value and value != NULL_VALUE else "99999999"
+
+
+def normalize_diag_date_token(value: str) -> str:
+    token = (value or "").strip()[:10].replace("-", "")
+    return token if re.fullmatch(r"\d{8}", token) else ""
+
+
+def is_on_or_after(date_value: str, ref_value: str) -> bool:
+    if not (date_value and ref_value):
+        return False
+    return parse_date_sort_key(date_value) >= parse_date_sort_key(ref_value)
+
+
+def is_within_days(date_value: str, ref_value: str, max_days: int) -> bool:
+    try:
+        d = datetime.strptime(date_value, "%Y%m%d")
+        r = datetime.strptime(ref_value, "%Y%m%d")
+    except Exception:
+        return False
+    return 0 <= (d - r).days <= max_days
+
+
+def is_date_in_window(date_str: str, center_str: Optional[str], days: int = 62) -> bool:
+    if not center_str or center_str == NULL_VALUE:
+        return True
+    try:
+        d = datetime.strptime(date_str, "%Y%m%d")
+        c = datetime.strptime(center_str, "%Y%m%d")
+    except Exception:
+        return False
+    return abs((d - c).days) <= days
+
+
+def is_date_in_forward_window(date_str: str, start_str: Optional[str], days: int = 90) -> bool:
+    if not start_str or start_str == NULL_VALUE:
+        return True
+    try:
+        d = datetime.strptime(date_str, "%Y%m%d")
+        s = datetime.strptime(start_str, "%Y%m%d")
+    except Exception:
+        return False
+    return 0 <= (d - s).days <= days
+
+
+def extract_breast_pathological_tnm(text: str) -> Optional[tuple[str, str, str, str]]:
+    matches = list(BREAST_PATHOLOGICAL_TNM_PATTERN.finditer(text))
+    if not matches:
+        return None
+    best = None
+    best_score = -1
+    for match in matches:
+        t = normalize_tnm_component(match.group(1) or "", "t")
+        n = normalize_tnm_component(match.group(2) or "", "n")
+        m = normalize_tnm_component(match.group(3) or "", "m") or "mx"
+        score = sum(1 for v in (t, n, m) if v and v not in {"tx", "nx", "mx"})
+        if score > best_score:
+            best = (re.sub(r"\s+", " ", match.group(0)).strip(), t, n, m)
+            best_score = score
+    return best
 
 
 def blank_stage_row(row: DocumentResult, reason: str, status: str = "no_pre_treatment_stage_found") -> DocumentResult:
@@ -815,10 +1187,11 @@ def find_metadata_files(input_dir: Path) -> list[Path]:
 
 def index_metadata_file(metadata_path: Path) -> MetadataIndex:
     metadata = load_metadata(metadata_path)
+    pdf_path = metadata_to_pdf_path(metadata_path)
     return MetadataIndex(
         ipp=metadata_to_ipp(metadata, metadata_path),
         metadata_file=metadata_path,
-        document_date=metadata_to_date(metadata),
+        document_date=metadata_to_date(metadata, pdf_path),
     )
 
 
@@ -843,9 +1216,9 @@ def metadata_to_pdf_path(metadata_path: Path) -> Path:
 def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) -> DocumentResult:
     metadata = load_metadata(metadata_path)
     ipp = metadata_to_ipp(metadata, metadata_path)
-    document_date = metadata_to_date(metadata)
-    visit_number = metadata_to_visit_number(metadata)
     pdf_path = metadata_to_pdf_path(metadata_path)
+    document_date = metadata_to_date(metadata, pdf_path)
+    visit_number = metadata_to_visit_number(metadata)
     document_kind = detect_document_kind(metadata, metadata_path, pdf_path)
 
     if is_excluded_document(metadata):
@@ -934,8 +1307,55 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
     chemo_detected = detect_signal(CHEMO_PATTERN, text)
     radiotherapy_detected = detect_signal(RADIOTHERAPY_PATTERN, text)
     metastasis_detected = detect_metastasis_signal(text)
+    is_breast = bool(BREAST_CONTEXT_PATTERN.search(text)) or (ipp_meta is not None and str(ipp_meta.organe).strip().upper() == "SEIN")
+    if metastasis_detected == "yes" and is_breast_regional_nodal_only_metastasis(text):
+        metastasis_detected = "no"
+    if is_breast and metastasis_detected == "yes" and not breast_has_distant_metastasis_signal(text):
+        metastasis_detected = "no"
+    is_melanoma = bool(MELANOMA_CONTEXT_PATTERN.search(text))
+    melanoma_nodal_signal = detect_melanoma_nodal_signal(text) if is_melanoma else "unknown"
+    has_imaging_evidence = detect_imaging_evidence(text, document_kind) if is_melanoma else False
+    ulcerated = bool(ULCERATION_PATTERN.search(text)) if is_melanoma else False
+    melanoma_meta_confirmed = detect_melanoma_metastasis_confirmed(text) if is_melanoma else False
 
-    if document_kind in {"rcp", "consultation"} and metastasis_detected == "yes":
+    if is_melanoma and melanoma_meta_confirmed:
+        metastasis_detected = "yes"
+    elif is_melanoma and MELANOMA_SURVEILLANCE_PATTERN.search(text):
+        metastasis_detected = "no"
+    elif is_melanoma and metastasis_detected == "yes":
+        if MELANOMA_WEAK_CERTAINTY_PATTERN.search(text) or MELANOMA_EXCLUSION_PATTERN.search(text):
+            metastasis_detected = "no"
+
+    if is_melanoma and melanoma_nodal_signal == "non_regional":
+        metastasis_detected = "yes"
+
+    if is_melanoma and melanoma_meta_confirmed:
+        return DocumentResult(
+            ipp=ipp,
+            metadata_file=str(metadata_path),
+            pdf_file=str(pdf_path),
+            document_date=document_date,
+            visit_number=visit_number,
+            text_length=len(text),
+            tnm_raw="melanoma_metastatic_signal_confirmed",
+            t=NULL_VALUE,
+            n=NULL_VALUE,
+            m="m1",
+            stage=metastatic_stage(),
+            status="stage_found",
+            reason="Melanoma metastasis confirmed",
+            all_tnm_matches="",
+            document_kind=document_kind,
+            tnm_context="metastatic_clinical",
+            treatment_detected=treatment_detected,
+            treatment_keywords=treatment_keywords,
+            surgery_detected=surgery_detected,
+            chemo_detected=chemo_detected,
+            radiotherapy_detected=radiotherapy_detected,
+            metastasis_detected=metastasis_detected,
+        )
+
+    if metastasis_detected == "yes":
         return DocumentResult(
             ipp=ipp,
             metadata_file=str(metadata_path),
@@ -949,7 +1369,7 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
             m="m1",
             stage=metastatic_stage(),
             status="stage_found",
-            reason="Metastatic mention in consultation/RCP",
+            reason="Metastatic mention found in document",
             all_tnm_matches="",
             document_kind=document_kind,
             tnm_context="metastatic_clinical",
@@ -960,6 +1380,35 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
             radiotherapy_detected=radiotherapy_detected,
             metastasis_detected=metastasis_detected,
         )
+
+    if is_breast:
+        breast_ptnm = extract_breast_pathological_tnm(text)
+        if breast_ptnm is not None:
+            raw_ptnm, t_ptnm, n_ptnm, m_ptnm = breast_ptnm
+            return DocumentResult(
+                ipp=ipp,
+                metadata_file=str(metadata_path),
+                pdf_file=str(pdf_path),
+                document_date=document_date,
+                visit_number=visit_number,
+                text_length=len(text),
+                tnm_raw=raw_ptnm,
+                t=t_ptnm,
+                n=n_ptnm,
+                m=m_ptnm,
+                stage=compute_stage(t_ptnm, n_ptnm, m_ptnm),
+                status="stage_found",
+                reason="Breast pTN detected in text (priority over document kind)",
+                all_tnm_matches="",
+                document_kind=document_kind,
+                tnm_context="breast_pathological_ptnm",
+                treatment_detected=treatment_detected,
+                treatment_keywords=treatment_keywords,
+                surgery_detected=surgery_detected,
+                chemo_detected=chemo_detected,
+                radiotherapy_detected=radiotherapy_detected,
+                metastasis_detected=metastasis_detected,
+            )
 
     explicit_stage = extract_explicit_stage(text)
     if explicit_stage is not None:
@@ -1015,6 +1464,37 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
             metastasis_detected=metastasis_detected,
         )
 
+    if is_melanoma and metastasis_detected == "no" and melanoma_nodal_signal != "positive":
+        m_value = "m0" if has_imaging_evidence else "mx"
+        breslow_stage = extract_breslow_stage(text, ulcerated, m_value)
+        if breslow_stage is not None:
+            raw_breslow, t_value, n_value, m_value, stage = breslow_stage
+            return DocumentResult(
+                ipp=ipp,
+                metadata_file=str(metadata_path),
+                pdf_file=str(pdf_path),
+                document_date=document_date,
+                visit_number=visit_number,
+                text_length=len(text),
+                tnm_raw=raw_breslow,
+                t=t_value,
+                n=n_value,
+                m=m_value,
+                stage=stage,
+                status="stage_found",
+                reason="Melanoma context: stage inferred from Breslow with M0/Mx based on imaging evidence",
+                all_tnm_matches="",
+                document_kind=document_kind,
+                tnm_context="breslow_fallback",
+                treatment_detected=treatment_detected,
+                treatment_keywords=treatment_keywords,
+                surgery_detected=surgery_detected,
+                chemo_detected=chemo_detected,
+                radiotherapy_detected=radiotherapy_detected,
+                metastasis_detected=metastasis_detected,
+            )
+
+    is_prostate = bool(PROSTATE_CONTEXT_PATTERN.search(text))
     candidates = extract_tnm_candidates(text, ipp_meta)
     chosen = choose_best_candidate(
         candidates,
@@ -1027,6 +1507,34 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
     )
 
     if chosen is None:
+        prostate_t_only = extract_prostate_t_only_stage(text, metastasis_detected)
+        if prostate_t_only is not None:
+            raw_tnm, t_value, n_value, m_value, stage = prostate_t_only
+            return DocumentResult(
+                ipp=ipp,
+                metadata_file=str(metadata_path),
+                pdf_file=str(pdf_path),
+                document_date=document_date,
+                visit_number=visit_number,
+                text_length=len(text),
+                tnm_raw=raw_tnm,
+                t=t_value,
+                n=n_value,
+                m=m_value,
+                stage=stage,
+                status="stage_found",
+                reason="Prostate T-only context; inferred N0/M0 from same-document absence of positive nodal/metastatic signals",
+                all_tnm_matches="",
+                document_kind=document_kind,
+                tnm_context="clinical",
+                treatment_detected=treatment_detected,
+                treatment_keywords=treatment_keywords,
+                surgery_detected=surgery_detected,
+                chemo_detected=chemo_detected,
+                radiotherapy_detected=radiotherapy_detected,
+                metastasis_detected=metastasis_detected,
+            )
+
         reconstructed = reconstruct_same_document_tnm(text)
         if reconstructed is not None:
             t_value, n_value, m_value, stage = reconstructed
@@ -1055,9 +1563,10 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
                 metastasis_detected=metastasis_detected,
             )
 
-        breslow_stage = extract_breslow_stage(text)
+        fallback_m = "m0" if has_imaging_evidence else "mx" if is_melanoma else "m0"
+        breslow_stage = extract_breslow_stage(text, ulcerated if is_melanoma else False, fallback_m)
         if breslow_stage is not None:
-            raw_breslow, t_value, n_value, m_value = breslow_stage
+            raw_breslow, t_value, n_value, m_value, stage = breslow_stage
             return DocumentResult(
                 ipp=ipp,
                 metadata_file=str(metadata_path),
@@ -1069,7 +1578,7 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
                 t=t_value,
                 n=n_value,
                 m=m_value,
-                stage=compute_stage(t_value, n_value, m_value),
+                stage=stage,
                 status="stage_found",
                 reason="Stage inferred from Breslow thickness fallback",
                 all_tnm_matches="",
@@ -1108,6 +1617,31 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
             metastasis_detected=metastasis_detected,
         )
 
+    final_stage, final_n, final_m, used_assumed_completion = derive_stage_from_partial_tnm(
+        stage=chosen.stage,
+        t_value=chosen.t,
+        n_value=chosen.n,
+        m_value=chosen.m,
+        tnm_context=chosen.context,
+        text=text,
+        metastasis_detected=metastasis_detected,
+    )
+
+    # Alignement branche prostate debug:
+    # si TNM présent mais non stadifiable, tenter l'inférence N0/M0 (hors signal nodal+/métastatique).
+    if final_stage == NULL_VALUE and is_prostate and chosen.t not in {"", NULL_VALUE, "tx"}:
+        n_known = final_n not in {"", NULL_VALUE, "nx"}
+        m_known = normalize_tnm_component(final_m, "m") in {"m0", "m1", "m1a", "m1b", "m1c"}
+        if (n_known or detect_nodal_positive_signal(text) != "yes") and (m_known or metastasis_detected != "yes"):
+            n_try = final_n if n_known else "n0"
+            m_try = final_m if m_known else "m0"
+            derived = compute_stage(chosen.t, n_try, m_try)
+            if derived != NULL_VALUE:
+                final_stage = derived
+                final_n = n_try
+                final_m = m_try
+                used_assumed_completion = True
+
     return DocumentResult(
         ipp=ipp,
         metadata_file=str(metadata_path),
@@ -1117,14 +1651,18 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
         text_length=len(text),
         tnm_raw=chosen.raw,
         t=chosen.t,
-        n=chosen.n,
-        m=chosen.m,
-        stage=chosen.stage,
-        status="stage_found" if chosen.stage != NULL_VALUE else "tnm_found_stage_unknown",
+        n=final_n,
+        m=final_m,
+        stage=final_stage,
+        status="stage_found" if final_stage != NULL_VALUE else "tnm_found_stage_unknown",
         reason=(
             "TNM extracted and stage computed"
-            if chosen.stage != NULL_VALUE
-            else "TNM extracted but organ-specific stage mapping returned null"
+            if final_stage != NULL_VALUE and not used_assumed_completion
+            else (
+                "Partial TNM inferred with assumed N0/M0 to derive baseline stage"
+                if final_stage != NULL_VALUE and used_assumed_completion
+                else "TNM extracted but organ-specific stage mapping returned null"
+            )
         ),
         all_tnm_matches=" | ".join(candidate.raw for candidate in candidates),
         document_kind=document_kind,
@@ -1182,6 +1720,23 @@ def infer_first_treatment(results: list[DocumentResult]) -> tuple[str, Optional[
     return "unknown_first_treatment", first_surgery_date, first_non_surgical_date
 
 
+def first_metastatic_signal_date(results: list[DocumentResult]) -> Optional[str]:
+    dates = sorted(
+        {
+            row.document_date
+            for row in results
+            if has_valid_date(row.document_date)
+            and (
+                row.metastasis_detected == "yes"
+                or row.tnm_context == "metastatic_clinical"
+                or row.m.startswith("m1")
+                or row.stage == "Stage IV"
+            )
+        }
+    )
+    return dates[0] if dates else None
+
+
 def baseline_sort_key(row: DocumentResult, document_priority: dict[str, int]) -> tuple[str, int, int, int]:
     major, minor = stage_rank(row.stage)
     return (
@@ -1190,6 +1745,128 @@ def baseline_sort_key(row: DocumentResult, document_priority: dict[str, int]) ->
         -major,
         -minor,
     )
+
+
+def tnm_completeness_score(row: DocumentResult) -> int:
+    score = 0
+    if row.t not in {"", NULL_VALUE, "tx"}:
+        score += 1
+    if row.n not in {"", NULL_VALUE, "nx"}:
+        score += 1
+    if row.m not in {"", NULL_VALUE, "mx"}:
+        score += 1
+    return score
+
+
+def document_kind_priority(kind: str) -> int:
+    priority = {
+        "pathology": 0,
+        "rcp": 1,
+        "radiology": 2,
+        "consultation": 3,
+        "other": 4,
+    }
+    return priority.get(kind, 9)
+
+
+def choose_surgery_first_pathologic_document(rows: list[DocumentResult]) -> Optional[DocumentResult]:
+    candidates = [
+        row
+        for row in rows
+        if row.tnm_context == "pathologic"
+        and not is_post_treatment_context(row.tnm_context)
+        and (
+            row.stage != NULL_VALUE
+            or (
+                row.t not in {"", NULL_VALUE, "tx"}
+                and row.n not in {"", NULL_VALUE, "nx"}
+            )
+        )
+    ]
+    if not candidates:
+        return None
+
+    pathology_dates = sorted(
+        [row.document_date for row in rows if row.document_kind == "pathology" and row.document_date != NULL_VALUE]
+    )
+    first_pathology_date = pathology_dates[0] if pathology_dates else None
+    if first_pathology_date is not None:
+        pre_pathology_ptpn = [
+            row
+            for row in candidates
+            if row_on_or_before(row, first_pathology_date)
+            and row.t not in {"", NULL_VALUE, "tx"}
+            and row.n not in {"", NULL_VALUE, "nx"}
+        ]
+        if pre_pathology_ptpn:
+            return max(
+                pre_pathology_ptpn,
+                key=lambda row: (
+                    tnm_completeness_score(row),
+                    stage_rank(row.stage)[0],
+                    stage_rank(row.stage)[1],
+                    parse_date_sort_key(row.document_date),
+                    1 if row.document_kind == "pathology" else 0,
+                ),
+            )
+
+    # Surgery-first cohorts are expected to have the most informative baseline
+    # in post-op pathology; prefer richer TNM and more specific stage labels.
+    return max(
+        candidates,
+        key=lambda row: (
+            tnm_completeness_score(row),
+            stage_rank(row.stage)[0],
+            stage_rank(row.stage)[1],
+            parse_date_sort_key(row.document_date),
+            1 if row.document_kind == "pathology" else 0,
+        ),
+    )
+
+
+def derive_stage_from_partial_tnm(
+    *,
+    stage: str,
+    t_value: str,
+    n_value: str,
+    m_value: str,
+    tnm_context: str,
+    text: str,
+    metastasis_detected: str,
+) -> tuple[str, str, str, bool]:
+    if stage != NULL_VALUE:
+        return stage, n_value, m_value, False
+
+    t_known = t_value not in {"", NULL_VALUE, "tx"}
+    n_known = n_value not in {"", NULL_VALUE, "nx"}
+    m_known = m_value not in {"", NULL_VALUE, "mx"}
+    if not t_known:
+        return stage, n_value, m_value, False
+
+    # Existing surgery-first/pathology behavior: pT + pN with missing M -> assume M0.
+    if tnm_context == "pathologic" and n_known and not m_known:
+        derived_stage = compute_stage(t_value, n_value, "m0")
+        if derived_stage != NULL_VALUE:
+            return derived_stage, n_value, "m0", True
+
+    is_prostate_case = bool(PROSTATE_CONTEXT_PATTERN.search(text))
+    if not is_prostate_case:
+        return stage, n_value, m_value, False
+
+    # New fallback for partially specified TNM (e.g., explicit T only):
+    # if there is no positive nodal/metastatic signal in the same document,
+    # assume N0/M0 to avoid waiting for a later document.
+    if not n_known and detect_nodal_positive_signal(text) == "yes":
+        return stage, n_value, m_value, False
+    if not m_known and metastasis_detected == "yes":
+        return stage, n_value, m_value, False
+
+    inferred_n = n_value if n_known else "n0"
+    inferred_m = m_value if m_known else "m0"
+    derived_stage = compute_stage(t_value, inferred_n, inferred_m)
+    if derived_stage == NULL_VALUE:
+        return stage, n_value, m_value, False
+    return derived_stage, inferred_n, inferred_m, True
 
 
 def pick_first_matching(
@@ -1212,9 +1889,118 @@ def choose_baseline_document(
     ipp_meta: Optional[IppMetadata],
 ) -> tuple[DocumentResult, str]:
     ordered = sorted(results, key=lambda row: parse_date_sort_key(row.document_date))
+    is_breast_case = bool(ipp_meta and str(ipp_meta.organe).strip().upper() == "SEIN")
+    is_melanoma_case = bool(ipp_meta and str(ipp_meta.organe).strip().upper() == "MELANOME")
+
+    if is_melanoma_case:
+        valid = [row for row in ordered if row.stage != NULL_VALUE]
+        metastatic_events = [row for row in valid if row.tnm_context == "metastatic_clinical" or row.stage == "Stage IV"]
+        first_metastatic_date = min((row.document_date for row in metastatic_events), default=None)
+        breslow_hits = [row for row in valid if row.tnm_context == "breslow_fallback"]
+        if breslow_hits:
+            if first_metastatic_date is not None:
+                pre_meta = [
+                    row for row in breslow_hits
+                    if parse_date_sort_key(row.document_date) <= parse_date_sort_key(first_metastatic_date)
+                ]
+                if pre_meta:
+                    return min(pre_meta, key=lambda row: parse_date_sort_key(row.document_date)), "melanoma_breslow_pre_metastatic"
+            return min(breslow_hits, key=lambda row: parse_date_sort_key(row.document_date)), "melanoma_breslow_baseline"
+
+        non_meta = [row for row in valid if row.tnm_context != "metastatic_clinical" and row.stage != "Stage IV"]
+        if non_meta:
+            return min(non_meta, key=lambda row: parse_date_sort_key(row.document_date)), "melanoma_non_metastatic_fallback"
+
+        non_iv = [row for row in valid if row.stage != "Stage IV"]
+        if non_iv:
+            return max(non_iv, key=lambda row: stage_rank(row.stage)), "melanoma_best_non_iv"
+
+    if is_breast_case:
+        breast_hits = [row for row in ordered if row.stage != NULL_VALUE]
+        if breast_hits:
+            diag_ref = ""
+            if ipp_meta is not None:
+                diag_ref = normalize_diag_date_token(ipp_meta.date_diag_tkc) or normalize_diag_date_token(ipp_meta.date_diag_dcc)
+            diag_opt = diag_ref or None
+
+            if diag_opt is not None:
+                breast_ptnm_3m = [
+                    row
+                    for row in breast_hits
+                    if row.tnm_context == "breast_pathological_ptnm"
+                    and is_date_in_forward_window(row.document_date, diag_opt, days=90)
+                ]
+                if breast_ptnm_3m:
+                    return min(breast_ptnm_3m, key=lambda row: parse_date_sort_key(row.document_date)), "breast_first_ptnm_within_3m_post_diag"
+
+            breast_window = [row for row in breast_hits if is_date_in_window(row.document_date, diag_opt, days=62)]
+            breast_pool = breast_window if breast_window else breast_hits
+
+            m0_hits = [row for row in breast_pool if normalize_tnm_component(row.m, "m") == "m0"]
+            metastatic_events_in_window = [
+                row for row in breast_pool
+                if row.tnm_context == "metastatic_clinical" or row.metastasis_detected == "yes"
+            ]
+            forced_m_value = "m0"
+            if not m0_hits and metastatic_events_in_window:
+                forced_m_value = "m1"
+
+            if forced_m_value == "m1" and metastatic_events_in_window:
+                chosen = min(metastatic_events_in_window, key=lambda row: parse_date_sort_key(row.document_date))
+                return chosen, "breast_window_m1_priority"
+
+            breast_pool_recent = sorted(
+                breast_pool,
+                key=lambda row: (parse_date_sort_key(row.document_date), row.document_kind),
+                reverse=True,
+            )
+
+            for row in breast_pool_recent:
+                if row.tnm_context == "breast_pathological_ptnm":
+                    stage = compute_stage(row.t, row.n, forced_m_value)
+                    return replace(row, m=forced_m_value, stage=stage), "breast_window_ptnm_recent"
+
+            for row in breast_pool_recent:
+                if row.tnm_context in {"clinical", "unknown"} and row.document_kind in {"consultation", "rcp"}:
+                    stage = compute_stage(row.t, row.n, forced_m_value)
+                    return replace(row, m=forced_m_value, stage=stage), "breast_window_recent_tnm_cs_rcp"
+
+            non_meta_breast = [
+                row for row in breast_hits
+                if not (row.tnm_context == "metastatic_clinical" or row.metastasis_detected == "yes")
+            ]
+            if non_meta_breast:
+                chosen = max(
+                    non_meta_breast,
+                    key=lambda row: (
+                        parse_date_sort_key(row.document_date),
+                        -({"pathology": 0, "rcp": 1, "consultation": 2, "radiology": 3, "other": 4}.get(row.document_kind, 9)),
+                    ),
+                )
+                return chosen, "breast_fallback"
+
     valid_non_post = [
         row for row in ordered if row.stage != NULL_VALUE and not is_post_treatment_context(row.tnm_context)
     ]
+    first_metastatic_date = first_metastatic_signal_date(ordered)
+    if first_metastatic_date is not None:
+        pre_metastatic = [
+            row
+            for row in valid_non_post
+            if row_on_or_before(row, first_metastatic_date) and row.stage != "Stage IV"
+        ]
+        if pre_metastatic:
+            pre_treatment = [row for row in pre_metastatic if not is_post_treatment_context(row.tnm_context)]
+            pool = pre_treatment if pre_treatment else pre_metastatic
+            chosen = min(
+                pool,
+                key=lambda row: (
+                    parse_date_sort_key(row.document_date),
+                    document_kind_priority(row.document_kind),
+                    -tnm_completeness_score(row),
+                ),
+            )
+            return chosen, "pre_metastatic_baseline_priority"
 
     first_rcp = next((row for row in ordered if row.document_kind == "rcp"), None)
     if first_rcp is not None and first_rcp.metastasis_detected == "yes":
@@ -1223,18 +2009,9 @@ def choose_baseline_document(
     treatment_mode, _, first_non_surgical_date = infer_first_treatment(ordered)
 
     if treatment_mode == "surgery_first":
-        preferred = pick_first_matching(
-            ordered,
-            lambda row: (
-                row.stage != NULL_VALUE
-                and row.tnm_context == "pathologic"
-                and not is_post_treatment_context(row.tnm_context)
-            ),
-            "surgery_first_pathologic_tnm",
-            {"rcp": 0, "pathology": 1, "consultation": 2, "other": 3},
-        )
-        if preferred is not None:
-            return preferred
+        preferred_pathology = choose_surgery_first_pathologic_document(ordered)
+        if preferred_pathology is not None:
+            return preferred_pathology, "surgery_first_pathologic_tnm_precise"
 
         fallback = pick_first_matching(
             ordered,
@@ -1273,39 +2050,40 @@ def choose_baseline_document(
         if fallback is not None:
             return fallback
 
-    generic = pick_first_matching(
-        ordered,
-        lambda row: (
-            row.stage != NULL_VALUE
-            and row.tnm_context in {"clinical", "explicit_stage", "metastatic_clinical"}
-            and not is_post_treatment_context(row.tnm_context)
-        ),
-        "first_clinical_tnm_fallback",
-        {"consultation": 0, "rcp": 1, "other": 2, "pathology": 3},
-    )
-    if generic is not None:
-        return generic
+    structured = [
+        row for row in valid_non_post
+        if row.t not in {"", NULL_VALUE, "tx"}
+        and row.n not in {"", NULL_VALUE, "nx"}
+    ]
+    if structured:
+        chosen = min(
+            structured,
+            key=lambda row: (
+                parse_date_sort_key(row.document_date),
+                document_kind_priority(row.document_kind),
+                -tnm_completeness_score(row),
+            ),
+        )
+        return chosen, "structured_tnm_first_chronological"
 
-    generic = pick_first_matching(
-        ordered,
-        lambda row: (
-            row.stage != NULL_VALUE
-            and row.tnm_context == "pathologic"
-            and not is_post_treatment_context(row.tnm_context)
-        ),
-        "first_pathologic_tnm_fallback",
-        {"rcp": 0, "pathology": 1, "consultation": 2, "other": 3},
-    )
-    if generic is not None:
-        return generic
+    pathology = [row for row in valid_non_post if row.document_kind == "pathology"]
+    if pathology:
+        chosen = max(
+            pathology,
+            key=lambda row: (
+                tnm_completeness_score(row),
+                stage_rank(row.stage)[0],
+                stage_rank(row.stage)[1],
+            ),
+        )
+        return chosen, "pathology_best_tnm"
 
-    generic = pick_first_matching(
-        ordered,
-        lambda row: row.stage != NULL_VALUE and not is_post_treatment_context(row.tnm_context),
-        "first_non_post_treatment_stage_fallback",
-    )
-    if generic is not None:
-        return generic
+    if valid_non_post:
+        chosen = max(
+            valid_non_post,
+            key=lambda row: (stage_rank(row.stage)[0], stage_rank(row.stage)[1]),
+        )
+        return chosen, "best_available_stage"
 
     if valid_non_post:
         return valid_non_post[0], "first_valid_stage_last_resort"
@@ -1327,8 +2105,42 @@ def build_ipp_result(
     rows: list[DocumentResult],
     strategy: str,
     ipp_meta: Optional[IppMetadata],
+    debug_hits: Optional[list[dict]] = None,
+    diagnosis_date: Optional[str] = None,
 ) -> IppResult:
     chosen, selection_reason = choose_baseline_document(rows, ipp_meta)
+    if debug_hits:
+        debug_selected = debug_engine.select_initial_stage(debug_hits, diagnosis_date=diagnosis_date)
+        if debug_selected is not None:
+            hit, debug_reason = debug_selected
+            hit_pdf = hit.get("pdf", "")
+            hit_date = hit.get("date", NULL_VALUE)
+            mapped = next(
+                (row for row in rows if Path(row.pdf_file).name == hit_pdf and row.document_date == hit_date),
+                None,
+            )
+            if mapped is not None:
+                chosen = replace(
+                    mapped,
+                    tnm_raw=str(hit.get("raw", mapped.tnm_raw)),
+                    t=str(hit.get("t", mapped.t)),
+                    n=str(hit.get("n", mapped.n)),
+                    m=str(hit.get("m", mapped.m)),
+                    stage=str(hit.get("stage", mapped.stage)),
+                )
+                selection_reason = debug_reason
+            else:
+                chosen = replace(
+                    rows[-1],
+                    tnm_raw=str(hit.get("raw", NULL_VALUE)),
+                    t=str(hit.get("t", NULL_VALUE)),
+                    n=str(hit.get("n", NULL_VALUE)),
+                    m=str(hit.get("m", NULL_VALUE)),
+                    stage=str(hit.get("stage", NULL_VALUE)),
+                    document_date=str(hit.get("date", NULL_VALUE)),
+                    reason="Selected by debug engine",
+                )
+                selection_reason = debug_reason
     if strategy == "latest":
         chosen = choose_best_document(rows, strategy)
         selection_reason = "latest_document"
@@ -1432,9 +2244,23 @@ def main() -> int:
         )
 
         document_results: list[DocumentResult] = []
+        debug_hits: list[dict] = []
+        debug_args = types.SimpleNamespace(only_stage_hits=True, show_text=False)
+        total_docs = len(metadata_entries)
         for metadata_entry in metadata_entries:
             result = build_document_result(metadata_entry.metadata_file, ipp_meta)
             document_results.append(result)
+            metadata = load_metadata(metadata_entry.metadata_file)
+            pdf_path = metadata_to_pdf_path(metadata_entry.metadata_file)
+            doc_hits = debug_engine.process_document(
+                idx=len(document_results),
+                total=total_docs,
+                metadata=metadata,
+                metadata_path=metadata_entry.metadata_file,
+                pdf_path=pdf_path,
+                args=debug_args,
+            )
+            debug_hits.extend(doc_hits)
             match_count = document_match_count(result)
             LOGGER.info(
                 "  date=%s | kind=%s | context=%s | stage=%s | matches=%s | surg=%s | chemo=%s | radio=%s | meta=%s | status=%s | file=%s",
@@ -1451,21 +2277,21 @@ def main() -> int:
                 Path(result.pdf_file).name,
             )
 
-            if args.ipp_strategy == "baseline" and result.stage != NULL_VALUE:
-                LOGGER.info(
-                    "  baseline early-stop | first stage found at date=%s | stage=%s | file=%s",
-                    result.document_date,
-                    result.stage,
-                    Path(result.pdf_file).name,
-                )
-                break
-
         ipp_total_matches = sum(document_match_count(row) for row in document_results)
         ipp_docs_with_match = sum(1 for row in document_results if document_match_count(row) > 0)
         running_total_matches += ipp_total_matches
         running_docs_with_match += ipp_docs_with_match
 
-        ipp_result = build_ipp_result(document_results, args.ipp_strategy, ipp_meta)
+        diagnosis_date = None
+        if ipp_meta is not None:
+            diagnosis_date = normalize_diag_date_token(ipp_meta.date_diag_tkc) or normalize_diag_date_token(ipp_meta.date_diag_dcc) or None
+        ipp_result = build_ipp_result(
+            document_results,
+            args.ipp_strategy,
+            ipp_meta,
+            debug_hits=debug_hits,
+            diagnosis_date=diagnosis_date,
+        )
         ipp_results.append(ipp_result)
         write_csv(ipp_csv, ipp_results)
 

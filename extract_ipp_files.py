@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -16,11 +17,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--clean-target", action="store_true", help="Delete existing files in target dir before copy.")
     parser.add_argument(
         "--date-basis",
-        choices=["established", "validation"],
-        default="established",
+        choices=["none", "established", "validation"],
+        default="none",
         help=(
-            "Date field used for filtering: established=Episode.StartDate; "
-            "validation=Document.CreateDate/UpdateDate."
+            "Date field used for filtering: none=no date filter; "
+            "established=Episode.StartDate; validation=Document.CreateDate/UpdateDate."
         ),
     )
     parser.add_argument(
@@ -32,6 +33,14 @@ def parse_args() -> argparse.Namespace:
         "--min-validation-date",
         default="2020-01-01",
         help="Minimum validation date (YYYY-MM-DD) when --date-basis=validation.",
+    )
+    parser.add_argument(
+        "--filter-document-labels",
+        action="store_true",
+        help=(
+            "Apply label pre-filter: exclude 'Lettre de liaison à la sortie d'un établissement de soins' "
+            "except when anatopathology signals are present."
+        ),
     )
     return parser.parse_args()
 
@@ -90,6 +99,60 @@ def clean_dir(path: Path) -> None:
             child.unlink()
 
 
+ANAPATH_PATTERN = re.compile(
+    r"(anapath|anatomopath|anatomo|histolog|cytolog)",
+    re.IGNORECASE,
+)
+LETTER_LIAISON_LABEL = "lettre de liaison à la sortie d'un établissement de soins"
+EXCLUDED_PRESCRIPTION_PATTERNS = [
+    re.compile(r"dossier\s+anesth", re.IGNORECASE),
+    re.compile(r"notice\s+info\s+et\s+consent", re.IGNORECASE),
+    re.compile(r"certificat", re.IGNORECASE),
+    re.compile(r"ordonnance", re.IGNORECASE),
+    re.compile(r"tra[çc]abilit[ée]\s*dmi", re.IGNORECASE),
+    re.compile(r"plan\s+de\s+prise", re.IGNORECASE),
+    re.compile(r"mise\s+[àa]\s+jour", re.IGNORECASE),
+    re.compile(r"pr[ée][-\s]?consultation", re.IGNORECASE),
+    re.compile(r"\btestexp\b|\btest\b", re.IGNORECASE),
+]
+EXCLUDED_TYPEDESCRIPTION_PATTERNS = [
+    re.compile(r"\biuct\.certif", re.IGNORECASE),
+    re.compile(r"\biuct\.maj", re.IGNORECASE),
+    re.compile(r"\biuct\.lv\b", re.IGNORECASE),
+    re.compile(r"\biuct\.l[A-Z0-9]", re.IGNORECASE),
+]
+
+
+def document_fields(metadata: dict) -> tuple[str, str, str]:
+    doc = metadata.get("Document", {}) if isinstance(metadata, dict) else {}
+    type_desc = str(doc.get("TypeDescription") or "").strip()
+    format_desc = str(doc.get("FormatComDesc") or "").strip()
+    prescription_desc = str(doc.get("PrescriptionDesc") or "").strip()
+    return type_desc, format_desc, prescription_desc
+
+
+def is_anapath_document(type_desc: str, format_desc: str, prescription_desc: str) -> bool:
+    haystack = " | ".join([type_desc, format_desc, prescription_desc])
+    return bool(ANAPATH_PATTERN.search(haystack))
+
+
+def is_excluded_by_label(type_desc: str, format_desc: str, prescription_desc: str) -> bool:
+    # Always keep HL7 documents (business requirement).
+    if type_desc.strip().upper() == "HL7":
+        return False
+
+    if format_desc.lower() == LETTER_LIAISON_LABEL:
+        return True
+
+    if any(pattern.search(prescription_desc) for pattern in EXCLUDED_PRESCRIPTION_PATTERNS):
+        return True
+
+    if any(pattern.search(type_desc) for pattern in EXCLUDED_TYPEDESCRIPTION_PATTERNS):
+        return True
+
+    return False
+
+
 def main() -> int:
     args = parse_args()
     source_dir = Path(args.source_dir)
@@ -113,6 +176,8 @@ def main() -> int:
     missing_pdf = 0
     decode_errors = 0
     filtered_by_date = 0
+    filtered_by_label = 0
+    kept_by_anapath_override = 0
 
     for metadata_path in metadata_files:
         try:
@@ -130,11 +195,20 @@ def main() -> int:
             if doc_date is None or doc_date < min_established:
                 filtered_by_date += 1
                 continue
-        else:
+        elif args.date_basis == "validation":
             doc_date = metadata_validation_date(metadata)
             if doc_date is None or doc_date < min_validation:
                 filtered_by_date += 1
                 continue
+
+        if args.filter_document_labels:
+            type_desc, format_desc, prescription_desc = document_fields(metadata)
+            if is_excluded_by_label(type_desc, format_desc, prescription_desc):
+                if is_anapath_document(type_desc, format_desc, prescription_desc):
+                    kept_by_anapath_override += 1
+                else:
+                    filtered_by_label += 1
+                    continue
 
         dest_json = target_dir / metadata_path.name
         shutil.copy2(metadata_path, dest_json)
@@ -156,6 +230,9 @@ def main() -> int:
     print(f"missing_pdf={missing_pdf}")
     print(f"decode_errors={decode_errors}")
     print(f"filtered_by_date={filtered_by_date}")
+    print(f"filtered_by_label={filtered_by_label}")
+    print(f"kept_by_anapath_override={kept_by_anapath_override}")
+    print(f"filter_document_labels={args.filter_document_labels}")
     print(f"date_basis={args.date_basis}")
     print(f"min_established_date={args.min_established_date}")
     print(f"min_validation_date={args.min_validation_date}")

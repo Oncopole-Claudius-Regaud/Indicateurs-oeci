@@ -86,6 +86,7 @@ def _ipp_records_from_df(df: pd.DataFrame) -> list[dict[str, Optional[str]]]:
 
 def _extract_ipp_df(
     date_debut_obs: str,
+    date_fin_obs: str,
     conn_id: str,
     only_missing_stage: bool,
 ) -> pd.DataFrame:
@@ -121,6 +122,7 @@ def _extract_ipp_df(
         )
         AND COALESCE(date_diag_tkc, date_diag_dcc) IS NOT NULL
         AND EXTRACT(YEAR FROM COALESCE(date_diag_tkc, date_diag_dcc))::int >= {int(year)}
+        AND COALESCE(date_diag_tkc, date_diag_dcc)::date <= DATE '{str(date_fin_obs)}'
         AND ipp_ocr IS NOT NULL
         AND ipp_ocr <> ''
         {stage_filter}
@@ -139,7 +141,7 @@ def _extract_ipp_df(
         conn.close()
 
 
-def extract_ipp_task(date_debut_obs: str, conn_id: str = "postgres_test", **kwargs) -> None:
+def extract_ipp_task(date_debut_obs: str, date_fin_obs: str, conn_id: str = "postgres_test", **kwargs) -> None:
     """
     Extrait tous les IPP distincts depuis datamart_oeci_survie.v_statut_vital
     dont date_diag_tkc (ou date_diag_dcc) >= 2020-01-01.
@@ -148,6 +150,7 @@ def extract_ipp_task(date_debut_obs: str, conn_id: str = "postgres_test", **kwar
     """
     df = _extract_ipp_df(
         date_debut_obs=date_debut_obs,
+        date_fin_obs=date_fin_obs,
         conn_id=conn_id,
         only_missing_stage=False,
     )
@@ -162,6 +165,7 @@ def extract_ipp_task(date_debut_obs: str, conn_id: str = "postgres_test", **kwar
 
 def extract_ipp_without_stage_task(
     date_debut_obs: str,
+    date_fin_obs: str,
     conn_id: str = "postgres_test",
     **kwargs,
 ) -> None:
@@ -171,6 +175,7 @@ def extract_ipp_without_stage_task(
     """
     df = _extract_ipp_df(
         date_debut_obs=date_debut_obs,
+        date_fin_obs=date_fin_obs,
         conn_id=conn_id,
         only_missing_stage=True,
     )

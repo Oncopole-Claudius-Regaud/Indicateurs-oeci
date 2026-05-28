@@ -57,7 +57,8 @@ with DAG(
 ) as dag:
 
     DATE_DEBUT_OBS = "{{ dag_run.conf.get('date_debut_obs', '2020') }}"
-    DATE_FIN_OBS = "{{ dag_run.conf.get('date_fin_obs', (macros.datetime.now().year - 1) ~ '-12-31') }}"
+    # Exclut les diagnostics d'octobre à décembre (données de suivi incomplètes l'année suivante).
+    DATE_FIN_OBS = "{{ dag_run.conf.get('date_fin_obs', (macros.datetime.now().year - 1) ~ '-09-30') }}"
 
     # ------------------------------------------------------------------
     # 1. Extraction des IPP sans stade depuis v_statut_vital
@@ -67,6 +68,7 @@ with DAG(
         python_callable=extract_ipp_without_stage_task,
         op_kwargs={
             "date_debut_obs": DATE_DEBUT_OBS,
+            "date_fin_obs": DATE_FIN_OBS,
             "conn_id": POSTGRES_CONN_ID,
         },
     )
