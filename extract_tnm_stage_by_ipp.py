@@ -5,7 +5,10 @@ import csv
 import json
 import logging
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import types
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
@@ -490,6 +493,19 @@ def detect_metastasis_signal(text: str) -> str:
     return "no"
 
 
+def has_post_treatment_tnm_prefix(raw_tnm: str) -> bool:
+    compact = re.sub(r"[\s\.\-_/,:;()]+", "", (raw_tnm or "").lower())
+    return bool(
+        re.search(
+            r"y(?:p|c)?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?)"
+            r"|y(?:p|c)?n(?:x|0|1mi|1[abc]?|2[ab]?|3[abc]?)"
+            r"|y(?:p|c)?m(?:x|0|1[abc]?)",
+            compact,
+            re.IGNORECASE,
+        )
+    )
+
+
 def is_breast_regional_nodal_only_metastasis(text: str) -> bool:
     if not BREAST_CONTEXT_PATTERN.search(text):
         return False
@@ -519,7 +535,14 @@ def detect_imaging_evidence(text: str, document_kind: str) -> bool:
 
 
 def detect_melanoma_nodal_signal(text: str) -> str:
-    if MELANOMA_NON_REGIONAL_NODAL_PATTERN.search(text):
+    for match in MELANOMA_NON_REGIONAL_NODAL_PATTERN.finditer(text):
+        context = text[max(0, match.start() - 220):min(len(text), match.end() + 220)]
+        if MELANOMA_WEAK_CERTAINTY_PATTERN.search(context):
+            continue
+        if MELANOMA_EXCLUSION_PATTERN.search(context):
+            continue
+        if MELANOMA_SURVEILLANCE_PATTERN.search(context):
+            continue
         return "non_regional"
     if MELANOMA_TRANSIT_SATELLITE_PATTERN.search(text):
         return "positive"
@@ -711,19 +734,47 @@ def metadata_to_visit_number(metadata: dict) -> str:
 
 
 def extract_pdf_text(pdf_path: Path) -> str:
+    def ocr_fallback() -> str:
+        if fitz is None:
+            return ""
+        if shutil.which("tesseract") is None:
+            return ""
+        texts: list[str] = []
+        try:
+            with fitz.open(pdf_path) as document, tempfile.TemporaryDirectory() as tmpdir:
+                for page_index, page in enumerate(document):
+                    image_path = Path(tmpdir) / f"page_{page_index:04d}.png"
+                    pix = page.get_pixmap(matrix=fitz.Matrix(2.5, 2.5), alpha=False)
+                    pix.save(str(image_path))
+                    cmd = ["tesseract", str(image_path), "stdout", "-l", "fra+eng", "--psm", "6"]
+                    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                    if proc.returncode == 0 and proc.stdout:
+                        texts.append(proc.stdout)
+        except Exception:
+            return ""
+        return normalize_text("\n".join(texts))
+
     if fitz is not None:
         chunks: list[str] = []
         with fitz.open(pdf_path) as document:
             for page in document:
                 chunks.append(page.get_text("text"))
-        return normalize_text("\n".join(chunks))
+        native_text = normalize_text("\n".join(chunks))
+        if len(native_text.strip()) >= 40:
+            return native_text
+        ocr_text = ocr_fallback()
+        return ocr_text or native_text
 
     if PdfReader is not None:
         chunks = []
         reader = PdfReader(str(pdf_path))
         for page in reader.pages:
             chunks.append(page.extract_text() or "")
-        return normalize_text("\n".join(chunks))
+        native_text = normalize_text("\n".join(chunks))
+        if len(native_text.strip()) >= 40:
+            return native_text
+        ocr_text = ocr_fallback()
+        return ocr_text or native_text
 
     raise RuntimeError("No PDF backend available.")
 
@@ -2110,7 +2161,11 @@ def build_ipp_result(
 ) -> IppResult:
     chosen, selection_reason = choose_baseline_document(rows, ipp_meta)
     if debug_hits:
-        debug_selected = debug_engine.select_initial_stage(debug_hits, diagnosis_date=diagnosis_date)
+        filtered_debug_hits = [
+            hit for hit in debug_hits
+            if not has_post_treatment_tnm_prefix(str(hit.get("raw", "")))
+        ]
+        debug_selected = debug_engine.select_initial_stage(filtered_debug_hits, diagnosis_date=diagnosis_date)
         if debug_selected is not None:
             hit, debug_reason = debug_selected
             hit_pdf = hit.get("pdf", "")

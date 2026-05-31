@@ -4,6 +4,9 @@ import argparse
 import json
 import logging
 import re
+import shutil
+import subprocess
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -180,6 +183,12 @@ NODAL_NEGATION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 PROSTATE_CONTEXT_PATTERN = re.compile(r"\b(prostate|prostatique)\b", re.IGNORECASE)
+PROSTATE_SUMMARY_TNM_PATTERN = re.compile(
+    r"\b(t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))\b[\s,;:()\\/\-\n]{0,30}"
+    r"\b(n(?:x|0|1mi|1[abc]?|2[ab]?|3[abc]?|o))\b[\s,;:()\\/\-\n]{0,30}"
+    r"\b(m(?:x|0|1[abc]?|o))\b",
+    re.IGNORECASE,
+)
 MELANOMA_CONTEXT_PATTERN = re.compile(r"\b(m[ée]lanome|breslow|clark|ssm)\b", re.IGNORECASE)
 
 # --- Sein / Sénologie ---
@@ -187,6 +196,16 @@ BREAST_CONTEXT_PATTERN = re.compile(
     r"\b(sein|mammaire|s[eé]nologie|mastectomie|tumorectomie|quadrantectomie|"
     r"carcinome\s+canalaire|carcinome\s+lobulaire|her2|recepteur\s+(estrog|progest)|"
     r"grade\s+(sbr|eln)|ganglion\s+sentinelle\s+axillaire)\b",
+    re.IGNORECASE,
+)
+BREAST_STRONG_CONTEXT_PATTERN = re.compile(
+    r"\b(mammaire|s[eé]nologie|mastectomie|tumorectomie|quadrantectomie|"
+    r"carcinome\s+canalaire|carcinome\s+lobulaire|her2|recepteur\s+(estrog|progest)|"
+    r"grade\s+(sbr|eln)|ganglion\s+sentinelle\s+axillaire)\b",
+    re.IGNORECASE,
+)
+NON_CLINICAL_BREAST_MENU_PATTERN = re.compile(
+    r"\boncophone\s+sein[\s-]?gyn[ée]cologie\b",
     re.IGNORECASE,
 )
 # pTNM pathologique post-chirurgie sein : préfixe p obligatoire
@@ -362,18 +381,46 @@ def require_pdf_backend() -> None:
 
 
 def extract_pdf_text(pdf_path: Path) -> str:
+    def ocr_fallback() -> str:
+        if fitz is None:
+            return ""
+        if shutil.which("tesseract") is None:
+            return ""
+        texts: list[str] = []
+        try:
+            with fitz.open(pdf_path) as document, tempfile.TemporaryDirectory() as tmpdir:
+                for page_index, page in enumerate(document):
+                    image_path = Path(tmpdir) / f"page_{page_index:04d}.png"
+                    pix = page.get_pixmap(matrix=fitz.Matrix(2.5, 2.5), alpha=False)
+                    pix.save(str(image_path))
+                    cmd = ["tesseract", str(image_path), "stdout", "-l", "fra+eng", "--psm", "6"]
+                    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                    if proc.returncode == 0 and proc.stdout:
+                        texts.append(proc.stdout)
+        except Exception:
+            return ""
+        return normalize_text("\n".join(texts))
+
     if fitz is not None:
         chunks: list[str] = []
         with fitz.open(pdf_path) as document:
             for page in document:
                 chunks.append(page.get_text("text"))
-        return normalize_text("\n".join(chunks))
+        native_text = normalize_text("\n".join(chunks))
+        if len(native_text.strip()) >= 40:
+            return native_text
+        ocr_text = ocr_fallback()
+        return ocr_text or native_text
     if PdfReader is not None:
         chunks = []
         reader = PdfReader(str(pdf_path))
         for page in reader.pages:
             chunks.append(page.extract_text() or "")
-        return normalize_text("\n".join(chunks))
+        native_text = normalize_text("\n".join(chunks))
+        if len(native_text.strip()) >= 40:
+            return native_text
+        ocr_text = ocr_fallback()
+        return ocr_text or native_text
     raise RuntimeError("No PDF backend available.")
 
 
@@ -582,7 +629,14 @@ def detect_imaging_evidence(text: str, document_kind: str) -> bool:
 
 
 def detect_melanoma_nodal_signal(text: str) -> str:
-    if MELANOMA_NON_REGIONAL_NODAL_PATTERN.search(text):
+    for match in MELANOMA_NON_REGIONAL_NODAL_PATTERN.finditer(text):
+        context = text[max(0, match.start() - 220):min(len(text), match.end() + 220)]
+        if MELANOMA_WEAK_CERTAINTY_PATTERN.search(context):
+            continue
+        if MELANOMA_EXCLUSION_PATTERN.search(context):
+            continue
+        if MELANOMA_SURVEILLANCE_PATTERN.search(context):
+            continue
         return "non_regional"
     if MELANOMA_TRANSIT_SATELLITE_PATTERN.search(text):
         return "positive"
@@ -759,6 +813,13 @@ def compute_breast_stage(t_value: str, n_value: str, m_value: str) -> str:
     """
     t = normalize_tnm_component(t_value, "t")
     n = normalize_tnm_component(n_value, "n")
+    # Collapse breast N subcategories for anatomical stage mapping.
+    if n.startswith("n3"):
+        n = "n3"
+    elif n.startswith("n2"):
+        n = "n2"
+    elif n.startswith("n1"):
+        n = "n1"
     m = normalize_tnm_component(m_value, "m") or "mx"
     logic_n = "n0" if n == "nx" else n
     logic_m = "m0" if m == "mx" else m
@@ -937,6 +998,23 @@ def tnm_rows(name: str, matches: list[re.Match]) -> list[tuple[str, str, str, st
     return rows
 
 
+def has_post_treatment_tnm_prefix(raw_tnm: str) -> bool:
+    compact = re.sub(r"[\s\.\-_/,:;()]+", "", (raw_tnm or "").lower())
+    return bool(
+        re.search(
+            r"y(?:p|c)?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?)"
+            r"|y(?:p|c)?n(?:x|0|1mi|1[abc]?|2[ab]?|3[abc]?)"
+            r"|y(?:p|c)?m(?:x|0|1[abc]?)",
+            compact,
+            re.IGNORECASE,
+        )
+    )
+
+
+def is_forbidden_y_prefix_hit(row: dict) -> bool:
+    return has_post_treatment_tnm_prefix(str(row.get("raw", "")))
+
+
 # =============================================================================
 # PROSTATE-SPECIFIC LOGIC
 # =============================================================================
@@ -1081,8 +1159,15 @@ def process_document(
 
     # Détection des contextes
     is_melanoma_doc  = bool(MELANOMA_CONTEXT_PATTERN.search(text))
-    is_breast_doc    = bool(BREAST_CONTEXT_PATTERN.search(text))
     is_prostate_doc  = bool(PROSTATE_CONTEXT_PATTERN.search(text))
+    has_breast_context = bool(BREAST_CONTEXT_PATTERN.search(text))
+    has_strong_breast_context = bool(BREAST_STRONG_CONTEXT_PATTERN.search(text))
+    has_non_clinical_breast_menu = bool(NON_CLINICAL_BREAST_MENU_PATTERN.search(text))
+    is_breast_doc = has_breast_context and not (has_non_clinical_breast_menu and not has_strong_breast_context)
+    # Avoid routing prostate files to breast branch when "sein" appears only in admin menus/footer.
+    # Hard precedence: any prostate context disables breast routing for this document.
+    if is_prostate_doc:
+        is_breast_doc = False
     metastasis_detected = detect_metastasis_signal(text)
     if metastasis_detected == "yes" and is_breast_regional_nodal_only_metastasis(text):
         metastasis_detected = "no"
@@ -1247,11 +1332,14 @@ def process_document(
 
         if tnm_matches:
             for pattern_name, raw, t, n, m in tnm_rows(chosen_mode, tnm_matches):
+                if has_post_treatment_tnm_prefix(raw):
+                    continue
                 stage = compute_breast_stage(t, n, m)
                 hits.append(make_hit(
                     chosen_mode, pattern_name, raw, t, n, m, stage,
                 ))
-            return hits
+            if hits:
+                return hits
 
         # Cas 4 : stade explicite
         explicit_stage = extract_explicit_stage(text)
@@ -1266,34 +1354,7 @@ def process_document(
     # BRANCHE GÉNÉRALE (prostate + tous autres cancers)
     # =========================================================================
 
-    # Stage IV métastatique
-    if metastasis_detected == "yes":
-        hits.append(make_hit(
-            "metastatic_first", "METASTASIS_PATTERN",
-            "metastatic_signal", "null", "null", "m1", "Stage IV",
-            extra={"is_metastatic_event": True},
-        ))
-        return hits
-
-    # Stage explicite
-    explicit_stage = extract_explicit_stage(text)
-    if explicit_stage is not None:
-        hits.append(make_hit(
-            "explicit_stage", "EXPLICIT_STAGE_PATTERN",
-            "explicit_stage_mention", "null", "null", "null", explicit_stage,
-        ))
-        return hits
-
-    # Stage 0 (DCIS / in situ)
-    stage_zero = infer_stage_zero_from_pathology(text, document_kind)
-    if stage_zero is not None:
-        hits.append(make_hit(
-            "pathology_stage_zero", "DCIS/IN_SITU_RULE",
-            "dcis_stage_zero_rule", "tis", "null", "null", stage_zero,
-        ))
-        return hits
-
-    # TNM strict → loose
+    # TNM strict → loose (prioritaire pour capturer un TNM historique dans le même document)
     tnm_matches = list(TNM_PATTERN.finditer(text))
     if tnm_matches:
         hit_rows = tnm_rows("TNM_PATTERN", tnm_matches)
@@ -1304,6 +1365,20 @@ def process_document(
         chosen_mode = "loose_fallback"
 
     if not hit_rows:
+        if is_prostate_doc:
+            summary_match = PROSTATE_SUMMARY_TNM_PATTERN.search(text)
+            if summary_match:
+                t_value = normalize_tnm_component(summary_match.group(1), "t")
+                n_value = normalize_tnm_component(summary_match.group(2).replace("o", "0").replace("O", "0"), "n")
+                m_value = normalize_tnm_component(summary_match.group(3).replace("o", "0").replace("O", "0"), "m")
+                stage = compute_stage(t_value, n_value, m_value)
+                if stage != "null":
+                    raw_tnm = re.sub(r"\s+", " ", summary_match.group(0)).strip()
+                    hits.append(make_hit(
+                        "prostate_summary_tnm_fallback", "PROSTATE_SUMMARY_TNM_PATTERN",
+                        raw_tnm, t_value, n_value, m_value, stage,
+                    ))
+                    return hits
         # Prostate T-only
         prostate_t_only = extract_prostate_t_only_stage(text, metastasis_detected)
         if prostate_t_only is not None:
@@ -1312,6 +1387,31 @@ def process_document(
                 "prostate_t_only_assumed_n0m0", "T_COMPONENT_PATTERN",
                 raw_tnm, t_value, n_value, m_value, stage,
             ))
+            return hits
+        # Stage IV métastatique (fallback s'il n'y a pas de TNM exploitable)
+        if metastasis_detected == "yes":
+            hits.append(make_hit(
+                "metastatic_first", "METASTASIS_PATTERN",
+                "metastatic_signal", "null", "null", "m1", "Stage IV",
+                extra={"is_metastatic_event": True},
+            ))
+            return hits
+        # Stage explicite
+        explicit_stage = extract_explicit_stage(text)
+        if explicit_stage is not None:
+            hits.append(make_hit(
+                "explicit_stage", "EXPLICIT_STAGE_PATTERN",
+                "explicit_stage_mention", "null", "null", "null", explicit_stage,
+            ))
+            return hits
+        # Stage 0 (DCIS / in situ)
+        stage_zero = infer_stage_zero_from_pathology(text, document_kind)
+        if stage_zero is not None:
+            hits.append(make_hit(
+                "pathology_stage_zero", "DCIS/IN_SITU_RULE",
+                "dcis_stage_zero_rule", "tis", "null", "null", stage_zero,
+            ))
+            return hits
         elif not args.only_stage_hits:
             LOGGER.info("No TNM hit | PDF=%s", pdf_path.name)
         return hits
@@ -1385,9 +1485,14 @@ def select_initial_stage(document_hits: list[dict], diagnosis_date: Optional[str
       → TNM pré-traitement > TNM post-traitement
       → TNM avant première métastase si dossier métastatique
     """
-    valid_hits = [row for row in document_hits if row["stage"] not in {"null", ""}]
+    valid_hits = [
+        row for row in document_hits
+        if row["stage"] not in {"null", ""}
+        and not is_forbidden_y_prefix_hit(row)
+    ]
     if not valid_hits:
         return None
+    has_breast_context = any(row.get("is_breast") and not row.get("is_prostate") for row in document_hits)
 
     # ── MÉLANOME ─────────────────────────────────────────────────────────────
     melanoma_hits = [row for row in valid_hits if row.get("is_melanoma")]
@@ -1423,9 +1528,17 @@ def select_initial_stage(document_hits: list[dict], diagnosis_date: Optional[str
             nodal_positive = any(row.get("nodal_signal") == "positive" for row in window_hits)
             nodal_negative = any(row.get("nodal_signal") == "negative" for row in window_hits)
             nodal_non_regional = any(row.get("nodal_signal") == "non_regional" for row in window_hits)
+            confirmed_metastatic_window = any(
+                row.get("mode") == "melanoma_metastasis_confirmed"
+                or (
+                    row.get("is_metastatic_event")
+                    and row.get("mode") in {"metastatic_first", "melanoma_metastasis_confirmed"}
+                )
+                for row in window_hits
+            )
 
             selected = dict(chosen)
-            if nodal_non_regional:
+            if nodal_non_regional and confirmed_metastatic_window:
                 selected["m"] = "m1"
                 selected["n"] = "nx"
                 selected["stage"] = "Stage IV"
@@ -1453,8 +1566,32 @@ def select_initial_stage(document_hits: list[dict], diagnosis_date: Optional[str
             return chosen, "melanoma_best_non_iv"
 
     # ── SEIN ──────────────────────────────────────────────────────────────────
-    breast_hits = [row for row in valid_hits if row.get("is_breast")]
+    breast_hits = [
+        row for row in valid_hits
+        if row.get("is_breast")
+        and not row.get("is_prostate")
+        and not has_post_treatment_tnm_prefix(str(row.get("raw", "")))
+    ]
     if breast_hits:
+        if diagnosis_date is None:
+            early_pool = [
+                row for row in breast_hits
+                if not row.get("is_metastatic_event")
+                and not row.get("is_post_treatment", False)
+                and row["mode"] != "breast_neoadjuvant_yptnm"
+            ]
+            if early_pool:
+                # No diagnosis anchor: keep the oldest valid baseline signal.
+                chosen = min(
+                    early_pool,
+                    key=lambda r: (
+                        parse_date_sort_key(r["date"]),
+                        0 if r["mode"] == "breast_pathological_ptnm" else 1,
+                        document_kind_priority(r["kind"]),
+                    ),
+                )
+                return chosen, "breast_earliest_valid_when_diag_missing"
+
         # Priorité métier SEIN: premier pTNM trouvé dans les 3 mois suivant la date_diag.
         if diagnosis_date is not None:
             breast_ptnm_3m = [
@@ -1539,16 +1676,7 @@ def select_initial_stage(document_hits: list[dict], diagnosis_date: Optional[str
             chosen = max(ptnm_hits, key=lambda r: parse_date_sort_key(r["date"]))
             return chosen, "breast_ptnm_primary_surgery"
 
-        # Priorité 2 : ypTNM néoadjuvant (avec flag)
-        yptnm_hits = [
-            row for row in breast_hits
-            if row["mode"] == "breast_neoadjuvant_yptnm"
-        ]
-        if yptnm_hits:
-            chosen = max(yptnm_hits, key=lambda r: parse_date_sort_key(r["date"]))
-            return chosen, "breast_yptnm_neoadjuvant"
-
-        # Priorité 3 : cTNM pré-op (RCP, consultation)
+        # Priorité 2 : cTNM pré-op (RCP, consultation)
         ctnm_hits = [
             row for row in breast_hits
             if row["mode"] in {"breast_clinical_tnm_strict", "breast_clinical_tnm_loose"}
@@ -1575,6 +1703,63 @@ def select_initial_stage(document_hits: list[dict], diagnosis_date: Optional[str
                 ),
             )
             return chosen, "breast_fallback"
+
+    # ── PROSTATE (T baseline + consolidation N/M à +90 jours) ───────────────
+    prostate_hits = [
+        row for row in valid_hits
+        if row.get("is_prostate")
+        and row.get("t") not in {"", "null", "tx"}
+        and not has_post_treatment_tnm_prefix(str(row.get("raw", "")))
+    ]
+    if prostate_hits and not has_breast_context:
+        baseline = min(prostate_hits, key=lambda r: parse_date_sort_key(r["date"]))
+        window_hits = [
+            row for row in valid_hits
+            if row.get("is_prostate")
+            and is_date_in_forward_window(row.get("date", "null"), baseline.get("date"), days=90)
+        ]
+
+        def n_rank(n_val: str) -> int:
+            n = normalize_tnm_component(n_val or "", "n")
+            if n == "n3":
+                return 5
+            if n == "n2":
+                return 4
+            if n in {"n1", "n1a", "n1b", "n1c", "n1mi"}:
+                return 3
+            if n == "n0":
+                return 2
+            if n == "nx" or not n:
+                return 1
+            return 1
+
+        best_n = baseline.get("n", "nx")
+        best_m = baseline.get("m", "mx")
+        for row in window_hits:
+            n_val = row.get("n", "nx")
+            m_val = normalize_tnm_component(row.get("m", ""), "m") or "mx"
+            if n_rank(n_val) > n_rank(best_n):
+                best_n = n_val
+            # Prefer explicit distant metastasis if present in consolidation window.
+            if m_val.startswith("m1"):
+                best_m = m_val
+            elif (normalize_tnm_component(best_m, "m") in {"", "mx"}) and m_val == "m0":
+                best_m = "m0"
+
+        t_val = baseline.get("t", "null")
+        n_norm = normalize_tnm_component(best_n, "n")
+        m_norm = normalize_tnm_component(best_m, "m")
+        if n_norm in {"", "nx"} and all(normalize_tnm_component(r.get("n", ""), "n") in {"", "nx"} for r in window_hits):
+            n_norm = "n0"
+        if m_norm in {"", "mx"}:
+            m_norm = "m0"
+        stage = compute_stage(t_val, n_norm, m_norm)
+
+        selected = dict(baseline)
+        selected["n"] = n_norm
+        selected["m"] = m_norm
+        selected["stage"] = stage
+        return selected, "prostate_t_baseline_plus90d_nm_consolidation"
 
     # ── GÉNÉRAL (prostate + autres) ──────────────────────────────────────────
     first_metastatic_date = min(
