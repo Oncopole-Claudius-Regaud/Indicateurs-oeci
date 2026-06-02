@@ -31,32 +31,32 @@ VERSION_FLAG = "STABLE"
 
 TNM_PATTERN = re.compile(
     r"(?<![A-Za-z0-9])"
-    r"((?:[cpyra]{0,4})?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))"
+    r"((?:[cpyrai]{0,4})?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))"
     r"(?:\s*[/,;:=-]?\s*)"
-    r"((?:[cpyra]{0,4})?n(?:x|0|1mi|1(?:[abc]|sn)?|2[ab]?|3[abc]?))"
+    r"((?:[cpyrai]{0,4})?n(?:x|0|1mi|1(?:[abc]|sn)?|2[ab]?|3[abc]?))"
     r"(?:\s*[/,;:=-]?\s*)"
-    r"((?:[cpyra]{0,4})?m(?:x|0|1[abc]?)?)?",
+    r"((?:[cpyrai]{0,4})?m(?:x|0|1[abc]?)?)?",
     re.IGNORECASE,
 )
 TNM_LOOSE_PATTERN = re.compile(
     r"(?<![A-Za-z0-9])"
-    r"((?:[cpyra]{0,4})?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))"
+    r"((?:[cpyrai]{0,4})?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))"
     r"(?:[\s\S]{0,120}?)"
-    r"((?:[cpyra]{0,4})?n(?:x|0|1mi|1(?:[abc]|sn)?|2[ab]?|3[abc]?))"
+    r"((?:[cpyrai]{0,4})?n(?:x|0|1mi|1(?:[abc]|sn)?|2[ab]?|3[abc]?))"
     r"(?:[\s\S]{0,80}?)"
-    r"((?:[cpyra]{0,4})?m(?:x|0|1[abc]?))",
+    r"((?:[cpyrai]{0,4})?m(?:x|0|1[abc]?))",
     re.IGNORECASE,
 )
 T_COMPONENT_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9])((?:[cpyra]{0,4})?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))(?![A-Za-z0-9])",
+    r"(?<![A-Za-z0-9])((?:[cpyrai]{0,4})?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
 N_COMPONENT_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9])((?:[cpyra]{0,4})?n(?:x|0|1mi|1(?:[abc]|sn)?|2[ab]?|3[abc]?))(?![A-Za-z0-9])",
+    r"(?<![A-Za-z0-9])((?:[cpyrai]{0,4})?n(?:x|0|1mi|1(?:[abc]|sn)?|2[ab]?|3[abc]?))(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
 M_COMPONENT_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9])((?:[cpyra]{0,4})?m(?:x|0|1[abc]?))(?![A-Za-z0-9])",
+    r"(?<![A-Za-z0-9])((?:[cpyrai]{0,4})?m(?:x|0|1[abc]?))(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
 EXPLICIT_STAGE_PATTERN = re.compile(
@@ -78,7 +78,8 @@ BRESLOW_PATTERN = re.compile(
 )
 METASTASIS_PATTERN = re.compile(
     r"\b(m[ée]tast|oligom[ée]tast|secondaire[s]?\s+(hepatiq|osseu|pulmon|cerebr)|"
-    r"atteinte\s+m[ée]tastatique|maladie\s+m[ée]tastatique)",
+    r"atteinte\s+m[ée]tastatique|maladie\s+m[ée]tastatique|"
+    r"l[ée]sion[s]?\s+osseuse[s]?\s+multifocale[s]?|atteinte\s+osseuse)",
     re.IGNORECASE,
 )
 METASTASIS_NEGATION_PATTERN = re.compile(
@@ -166,6 +167,9 @@ INVASION_EXCLUSION_PATTERN = re.compile(
 )
 NODAL_NEGATIVE_PATTERN = re.compile(
     r"\b(absence\s+de\s+metastase\s+ganglionnaire|sans\s+metastase\s+ganglionnaire|"
+    r"absence\s+d[''’]\s*atteinte\s+ganglionnaire|absence\s+de\s+atteinte\s+ganglionnaire|"
+    r"sans\s+atteinte\s+ganglionnaire|pas\s+d[''’]\s*atteinte\s+ganglionnaire|"
+    r"pas\s+de\s+atteinte\s+ganglionnaire|"
     r"ganglion\s+sentinelle\s+negatif|pas\s+de\s+metastase\s+ganglionnaire|"
     r"aucune?\s+metastase\s+ganglionnaire|0\s*/\s*[1-9]\d*|"
     r"pas\s+mis\s+en\s+[eé]vidence\s+(?:d['']\s*|de\s+)ad[ée]nom[ée]galie(?:s)?(?:\s+axillaire(?:s)?)?|"
@@ -178,11 +182,23 @@ NODAL_POSITIVE_PATTERN = re.compile(
     r"atteinte\s+ganglionnaire)\b",
     re.IGNORECASE,
 )
-NODAL_NEGATION_PATTERN = re.compile(
-    r"\b(pas\s+de|sans|absence\s+de|aucun(?:e)?)\b",
+NODAL_SUSPICIOUS_PATTERN = re.compile(
+    r"\b(suspicion\s+(?:d[''’]\s*)?(?:atteinte\s+)?ganglionnaire|"
+    r"atteinte\s+ganglionnaire\s+suspecte?|"
+    r"ad[ée]nopathie[s]?\s+suspecte?s?|"
+    r"ganglion(?:naire)?s?\s+suspecte?s?)\b",
     re.IGNORECASE,
 )
-PROSTATE_CONTEXT_PATTERN = re.compile(r"\b(prostate|prostatique)\b", re.IGNORECASE)
+NODAL_NEGATION_PATTERN = re.compile(
+    r"\b(pas\s+d[''’]?|pas\s+de|sans|absence\s+d[''’]?|absence\s+de|aucun(?:e)?)\b",
+    re.IGNORECASE,
+)
+PROSTATE_CONTEXT_PATTERN = re.compile(
+    r"\b(prostate|prostatique|prostatectomie|biopsie[s]?\s+prostatique[s]?|"
+    r"ad[ée]nocarcinome\s+prostatique|loge\s+prostatique|pirads|pi[\s-]?rads|"
+    r"gleason|isup|psa)\b",
+    re.IGNORECASE,
+)
 PROSTATE_SUMMARY_TNM_PATTERN = re.compile(
     r"\b(t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))\b[\s,;:()\\/\-\n]{0,30}"
     r"\b(n(?:x|0|1mi|1[abc]?|2[ab]?|3[abc]?|o))\b[\s,;:()\\/\-\n]{0,30}"
@@ -257,6 +273,12 @@ MELANOMA_WEAK_CERTAINTY_PATTERN = re.compile(
 )
 MELANOMA_EXCLUSION_PATTERN = re.compile(
     r"\b(r[ée]actionnel|inflammatoire|stable\s+non\s+suspect|non\s+suspect|b[ée]nin|cicatriciel|post[\s-]?op[ée]ratoire|post[\s-]?th[ée]rapeutique)\b",
+    re.IGNORECASE,
+)
+MELANOMA_SENTINEL_MAPPING_PATTERN = re.compile(
+    r"\b(ganglion[s]?\s+(?:intens[ée]ment\s+)?fixant[s]?|radiotraceur|gamma\s+cam[ée]ra|"
+    r"sonde\s+de\s+d[ée]tection|migration\s+cervicale|lymphoscintigraphie|"
+    r"ganglion[s]?\s+sentinelle[s]?)\b",
     re.IGNORECASE,
 )
 MELANOMA_NON_REGIONAL_NODAL_PATTERN = re.compile(
@@ -629,8 +651,14 @@ def detect_imaging_evidence(text: str, document_kind: str) -> bool:
 
 
 def detect_melanoma_nodal_signal(text: str) -> str:
+    sentinel_mapping_only = bool(MELANOMA_SENTINEL_MAPPING_PATTERN.search(text))
     for match in MELANOMA_NON_REGIONAL_NODAL_PATTERN.finditer(text):
+        prefix = text[max(0, match.start() - 160):match.start()]
         context = text[max(0, match.start() - 220):min(len(text), match.end() + 220)]
+        if sentinel_mapping_only and not MELANOMA_METASTASIS_CONFIRMED_PATTERN.search(context):
+            continue
+        if NODAL_NEGATION_PATTERN.search(prefix):
+            continue
         if MELANOMA_WEAK_CERTAINTY_PATTERN.search(context):
             continue
         if MELANOMA_EXCLUSION_PATTERN.search(context):
@@ -638,7 +666,7 @@ def detect_melanoma_nodal_signal(text: str) -> str:
         if MELANOMA_SURVEILLANCE_PATTERN.search(context):
             continue
         return "non_regional"
-    if MELANOMA_TRANSIT_SATELLITE_PATTERN.search(text):
+    if MELANOMA_TRANSIT_SATELLITE_PATTERN.search(text) and not sentinel_mapping_only:
         return "positive"
     if detect_nodal_positive_signal(text) == "yes":
         return "positive"
@@ -649,6 +677,20 @@ def detect_melanoma_nodal_signal(text: str) -> str:
 
 def detect_nodal_positive_signal(text: str) -> str:
     for match in NODAL_POSITIVE_PATTERN.finditer(text):
+        start = max(0, match.start() - 120)
+        end = min(len(text), match.end() + 80)
+        prefix = text[start:match.start()]
+        context = text[start:end]
+        if NODAL_NEGATION_PATTERN.search(prefix):
+            continue
+        if NODAL_SUSPICIOUS_PATTERN.search(context):
+            continue
+        return "yes"
+    return "no"
+
+
+def detect_nodal_uncertain_signal(text: str) -> str:
+    for match in NODAL_SUSPICIOUS_PATTERN.finditer(text):
         start = max(0, match.start() - 120)
         prefix = text[start:match.start()]
         if NODAL_NEGATION_PATTERN.search(prefix):
@@ -768,7 +810,7 @@ def compute_melanoma_stage(t_value: str, n_value: str, m_value: str, ulcerated: 
     t = normalize_tnm_component(t_value, "t")
     n = normalize_tnm_component(n_value, "n")
     m = normalize_tnm_component(m_value, "m") or "mx"
-    logic_n = "n0" if n == "nx" else n
+    logic_n = n
     logic_m = m
 
     if logic_m == "mx":
@@ -776,6 +818,8 @@ def compute_melanoma_stage(t_value: str, n_value: str, m_value: str, ulcerated: 
 
     if logic_m.startswith("m1"):
         return "Stage IV"
+    if logic_n == "nx":
+        return "null"
     if t == "tis":
         return "Stage 0"
     if t in {"t1", "t1a"}:
@@ -821,11 +865,13 @@ def compute_breast_stage(t_value: str, n_value: str, m_value: str) -> str:
     elif n.startswith("n1"):
         n = "n1"
     m = normalize_tnm_component(m_value, "m") or "mx"
-    logic_n = "n0" if n == "nx" else n
-    logic_m = "m0" if m == "mx" else m
+    logic_n = n
+    logic_m = m
 
     if logic_m.startswith("m1"):
         return "Stage IV"
+    if logic_n in {"", "nx"} or logic_m in {"", "mx"}:
+        return "null"
     if t == "tis" and logic_n == "n0":
         return "Stage 0"
     if t in {"t1", "t1a", "t1b", "t1c", "t1mi"} and logic_n == "n0":
@@ -885,11 +931,35 @@ def breslow_t_category_with_ulceration(mm: float, ulcerated: bool) -> str:
 
 
 def infer_n_from_nodal_context(text: str) -> str:
-    has_negative = bool(NODAL_NEGATIVE_PATTERN.search(text))
-    has_positive = bool(NODAL_POSITIVE_PATTERN.search(text))
-    if has_negative and not has_positive:
-        return "n0"
-    return "nx"
+    if detect_nodal_positive_signal(text) == "yes":
+        return "n1"
+    if detect_nodal_uncertain_signal(text) == "yes":
+        return "nx"
+    return "n0"
+
+
+def extract_melanoma_t_category_stage(text: str, metastasis_detected: str) -> Optional[tuple[str, str, str, str, str]]:
+    if not MELANOMA_CONTEXT_PATTERN.search(text):
+        return None
+    if metastasis_detected == "yes":
+        return None
+
+    t_values = [
+        normalize_tnm_component(m.group(1), "t")
+        for m in T_COMPONENT_PATTERN.finditer(text)
+        if not has_post_treatment_tnm_prefix(m.group(1))
+    ]
+    t_values = [value for value in t_values if value and value not in {"tx"}]
+    if not t_values:
+        return None
+
+    t_value = max(t_values, key=t_component_rank)
+    n_value = infer_n_from_nodal_context(text)
+    m_value = "m0"
+    stage = compute_melanoma_stage(t_value, n_value, m_value, ulcerated=False)
+    if stage == "null":
+        return None
+    return f"{t_value.upper()} (melanoma T category inferred N0M0)", t_value, n_value, m_value, stage
 
 
 # =============================================================================
@@ -973,11 +1043,11 @@ def document_kind_priority(kind: str) -> int:
 def tnm_rows(name: str, matches: list[re.Match]) -> list[tuple[str, str, str, str, str]]:
     rows: list[tuple[str, str, str, str, str]] = []
     t_token_pattern = re.compile(
-        r"(?<![A-Za-z0-9])((?:[cpyra]{0,4})?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))(?![A-Za-z0-9])",
+        r"(?<![A-Za-z0-9])((?:[cpyrai]{0,4})?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))(?![A-Za-z0-9])",
         re.IGNORECASE,
     )
     t_irm_pattern = re.compile(
-        r"(?<![A-Za-z0-9])((?:[cpyra]{0,4})?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))"
+        r"(?<![A-Za-z0-9])((?:[cpyrai]{0,4})?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))"
         r"(?:[\s,;:()\\/-]{0,12})irm\b",
         re.IGNORECASE,
     )
@@ -1002,9 +1072,9 @@ def has_post_treatment_tnm_prefix(raw_tnm: str) -> bool:
     compact = re.sub(r"[\s\.\-_/,:;()]+", "", (raw_tnm or "").lower())
     return bool(
         re.search(
-            r"y(?:p|c)?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?)"
-            r"|y(?:p|c)?n(?:x|0|1mi|1[abc]?|2[ab]?|3[abc]?)"
-            r"|y(?:p|c)?m(?:x|0|1[abc]?)",
+            r"y(?:p|c)?i?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?)"
+            r"|y(?:p|c)?i?n(?:x|0|1mi|1[abc]?|2[ab]?|3[abc]?)"
+            r"|y(?:p|c)?i?m(?:x|0|1[abc]?)",
             compact,
             re.IGNORECASE,
         )
@@ -1037,25 +1107,36 @@ def extract_prostate_t_only_stage(text: str, metastasis_detected: str) -> Option
         return None
     if metastasis_detected == "yes":
         return None
-    if detect_nodal_positive_signal(text) == "yes":
+    has_nodal_positive = detect_nodal_positive_signal(text) == "yes"
+    has_nodal_uncertain = detect_nodal_uncertain_signal(text) == "yes"
+    if has_nodal_positive:
         return None
     t_irm_pattern = re.compile(
-        r"(?<![A-Za-z0-9])((?:[cpyra]{0,4})?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))"
+        r"(?<![A-Za-z0-9])((?:[cpyrai]{0,4})?t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))"
         r"(?:[\s,;:()\\/-]{0,12})irm\b",
         re.IGNORECASE,
     )
-    irm_t = [normalize_tnm_component(m.group(1), "t") for m in t_irm_pattern.finditer(text)]
+    irm_t = [
+        normalize_tnm_component(m.group(1), "t")
+        for m in t_irm_pattern.finditer(text)
+        if not has_post_treatment_tnm_prefix(m.group(1))
+    ]
     t_values = [v for v in irm_t if v and v not in {"tx"}]
     if not t_values:
-        all_t = [normalize_tnm_component(m.group(1), "t") for m in T_COMPONENT_PATTERN.finditer(text)]
+        all_t = [
+            normalize_tnm_component(m.group(1), "t")
+            for m in T_COMPONENT_PATTERN.finditer(text)
+            if not has_post_treatment_tnm_prefix(m.group(1))
+        ]
         t_values = [v for v in all_t if v and v not in {"tx"}]
     if not t_values:
         return None
     t_value = max(t_values, key=t_component_rank)
-    stage = compute_stage(t_value, "n0", "m0")
+    n_value = "nx" if has_nodal_uncertain else "n0"
+    stage = "null" if n_value == "nx" else compute_stage(t_value, n_value, "m0")
     if stage == "null":
-        return None
-    return f"{t_value.upper()} (prostate inferred N0M0)", t_value, "n0", "m0", stage
+        return f"{t_value.upper()} (prostate inferred NxM0)", t_value, n_value, "m0", stage
+    return f"{t_value.upper()} (prostate inferred N0M0)", t_value, n_value, "m0", stage
 
 
 # =============================================================================
@@ -1209,7 +1290,7 @@ def process_document(
         melanoma_meta_confirmed = detect_melanoma_metastasis_confirmed(text)
         nodal_signal = detect_melanoma_nodal_signal(text)
         imaging_evidence = detect_imaging_evidence(text, document_kind)
-        default_m = "m0" if imaging_evidence else "mx"
+        default_m = "m0"
 
         if nodal_signal == "positive":
             hits.append(make_hit(
@@ -1275,6 +1356,14 @@ def process_document(
                     "melanoma_breslow", "BRESLOW_PATTERN", raw, t, n, default_m, stage,
                     extra={"breslow_mm": mm, "ulcerated": ulcerated},
                 ))
+            return hits
+
+        melanoma_t_stage = extract_melanoma_t_category_stage(text, metastasis_detected)
+        if melanoma_t_stage is not None and not melanoma_meta_confirmed:
+            raw, t, n, m, stage = melanoma_t_stage
+            hits.append(make_hit(
+                "melanoma_t_category", "T_COMPONENT_PATTERN", raw, t, n, m, stage,
+            ))
             return hits
 
         # Fallback : stade explicite mélanome
@@ -1437,7 +1526,13 @@ def process_document(
         ):
             n_known = n not in {"", "null", "nx"}
             m_known = m in {"m0", "m1", "m1a", "m1b", "m1c"}
-            if (n_known or detect_nodal_positive_signal(text) != "yes") and (
+            if (
+                n_known
+                or (
+                    detect_nodal_positive_signal(text) != "yes"
+                    and detect_nodal_uncertain_signal(text) != "yes"
+                )
+            ) and (
                 m_known or metastasis_detected != "yes"
             ):
                 n_used = n if n_known else "n0"
@@ -1492,7 +1587,6 @@ def select_initial_stage(document_hits: list[dict], diagnosis_date: Optional[str
     ]
     if not valid_hits:
         return None
-    has_breast_context = any(row.get("is_breast") and not row.get("is_prostate") for row in document_hits)
 
     # ── MÉLANOME ─────────────────────────────────────────────────────────────
     melanoma_hits = [row for row in valid_hits if row.get("is_melanoma")]
@@ -1551,9 +1645,10 @@ def select_initial_stage(document_hits: list[dict], diagnosis_date: Optional[str
                 selected["n"] = "n0"
                 selected["stage"] = compute_melanoma_stage(selected["t"], "n0", selected.get("m", "mx"), bool(selected.get("ulcerated")))
                 return selected, "melanoma_breslow_plus90d_nodal_negative"
-            selected["n"] = "nx"
-            selected["stage"] = compute_melanoma_stage(selected["t"], "nx", selected.get("m", "mx"), bool(selected.get("ulcerated")))
-            return selected, "melanoma_breslow_plus90d_nodal_unknown"
+            selected["n"] = "n0"
+            selected["m"] = "m0" if normalize_tnm_component(selected.get("m", ""), "m") in {"", "mx"} else selected.get("m", "m0")
+            selected["stage"] = compute_melanoma_stage(selected["t"], "n0", selected.get("m", "m0"), bool(selected.get("ulcerated")))
+            return selected, "melanoma_breslow_plus90d_implicit_n0m0"
 
         non_meta = [row for row in melanoma_hits if not row.get("is_metastatic_event")]
         if non_meta:
@@ -1566,13 +1661,14 @@ def select_initial_stage(document_hits: list[dict], diagnosis_date: Optional[str
             return chosen, "melanoma_best_non_iv"
 
     # ── SEIN ──────────────────────────────────────────────────────────────────
+    has_prostate_context = any(row.get("is_prostate") for row in document_hits)
     breast_hits = [
         row for row in valid_hits
         if row.get("is_breast")
         and not row.get("is_prostate")
         and not has_post_treatment_tnm_prefix(str(row.get("raw", "")))
     ]
-    if breast_hits:
+    if breast_hits and not has_prostate_context:
         if diagnosis_date is None:
             early_pool = [
                 row for row in breast_hits
@@ -1711,7 +1807,7 @@ def select_initial_stage(document_hits: list[dict], diagnosis_date: Optional[str
         and row.get("t") not in {"", "null", "tx"}
         and not has_post_treatment_tnm_prefix(str(row.get("raw", "")))
     ]
-    if prostate_hits and not has_breast_context:
+    if prostate_hits:
         baseline = min(prostate_hits, key=lambda r: parse_date_sort_key(r["date"]))
         window_hits = [
             row for row in valid_hits
