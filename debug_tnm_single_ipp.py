@@ -1687,6 +1687,9 @@ def select_initial_stage(document_hits: list[dict], diagnosis_date: Optional[str
         if row["stage"] not in {"null", ""}
         or row["mode"] in {"breast_pathological_ptnm", "breast_clinical_tnm_strict", "breast_clinical_tnm_loose"}
     ]
+    if breast_candidate_hits and not breast_hits and not valid_hits:
+        return None
+
     if breast_hits and not has_prostate_context:
         def with_breast_stage(row: dict, reason: str, forced_m_value: str = "m0") -> tuple[dict, str]:
             selected = dict(row)
@@ -1835,6 +1838,9 @@ def select_initial_stage(document_hits: list[dict], diagnosis_date: Optional[str
                 ),
             )
             return with_breast_stage(chosen, "breast_fallback")
+
+        if not valid_hits:
+            return None
 
     # ── PROSTATE (T baseline + consolidation N/M à +90 jours) ───────────────
     prostate_hits = [

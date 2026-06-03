@@ -2407,7 +2407,11 @@ def build_ipp_result(
             hit for hit in debug_hits
             if not has_post_treatment_tnm_prefix(str(hit.get("raw", "")))
         ]
-        debug_selected = debug_engine.select_initial_stage(filtered_debug_hits, diagnosis_date=diagnosis_date)
+        try:
+            debug_selected = debug_engine.select_initial_stage(filtered_debug_hits, diagnosis_date=diagnosis_date)
+        except Exception as exc:
+            LOGGER.warning("Debug stage selection failed; keeping extract selection | ipp=%s | error=%s", rows[0].ipp if rows else "", exc)
+            debug_selected = None
         if debug_selected is not None:
             hit, debug_reason = debug_selected
             hit_pdf = hit.get("pdf", "")
