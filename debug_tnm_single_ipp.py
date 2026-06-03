@@ -1036,6 +1036,17 @@ def document_kind_priority(kind: str) -> int:
     }.get(kind, 5)
 
 
+def breast_document_kind_priority(kind: str) -> int:
+    return {
+        "pathology": 0,
+        "rcp": 1,
+        "consultation": 2,
+        "radiology": 3,
+        "hospitalization": 4,
+        "other": 5,
+    }.get(kind, 5)
+
+
 # =============================================================================
 # TNM ROW EXTRACTION
 # =============================================================================
@@ -1585,7 +1596,17 @@ def select_initial_stage(document_hits: list[dict], diagnosis_date: Optional[str
         if row["stage"] not in {"null", ""}
         and not is_forbidden_y_prefix_hit(row)
     ]
-    if not valid_hits:
+    has_prostate_context = any(row.get("is_prostate") for row in document_hits)
+    breast_candidate_hits = [
+        row for row in document_hits
+        if row.get("is_breast")
+        and not row.get("is_prostate")
+        and not has_post_treatment_tnm_prefix(str(row.get("raw", "")))
+        and not is_forbidden_y_prefix_hit(row)
+        and normalize_tnm_component(row.get("t", ""), "t") not in {"", "tx"}
+        and normalize_tnm_component(row.get("n", ""), "n") not in {"", "nx"}
+    ]
+    if not valid_hits and not breast_candidate_hits:
         return None
 
     # ── MÉLANOME ─────────────────────────────────────────────────────────────
@@ -1661,14 +1682,19 @@ def select_initial_stage(document_hits: list[dict], diagnosis_date: Optional[str
             return chosen, "melanoma_best_non_iv"
 
     # ── SEIN ──────────────────────────────────────────────────────────────────
-    has_prostate_context = any(row.get("is_prostate") for row in document_hits)
     breast_hits = [
-        row for row in valid_hits
-        if row.get("is_breast")
-        and not row.get("is_prostate")
-        and not has_post_treatment_tnm_prefix(str(row.get("raw", "")))
+        row for row in breast_candidate_hits
+        if row["stage"] not in {"null", ""}
+        or row["mode"] in {"breast_pathological_ptnm", "breast_clinical_tnm_strict", "breast_clinical_tnm_loose"}
     ]
     if breast_hits and not has_prostate_context:
+        def with_breast_stage(row: dict, reason: str, forced_m_value: str = "m0") -> tuple[dict, str]:
+            selected = dict(row)
+            if normalize_tnm_component(selected.get("m", ""), "m") in {"", "mx"}:
+                selected["m"] = forced_m_value
+            selected["stage"] = compute_breast_stage(selected["t"], selected["n"], selected["m"])
+            return selected, reason
+
         if diagnosis_date is None:
             early_pool = [
                 row for row in breast_hits
@@ -1683,10 +1709,10 @@ def select_initial_stage(document_hits: list[dict], diagnosis_date: Optional[str
                     key=lambda r: (
                         parse_date_sort_key(r["date"]),
                         0 if r["mode"] == "breast_pathological_ptnm" else 1,
-                        document_kind_priority(r["kind"]),
+                        breast_document_kind_priority(r["kind"]),
                     ),
                 )
-                return chosen, "breast_earliest_valid_when_diag_missing"
+                return with_breast_stage(chosen, "breast_earliest_valid_when_diag_missing")
 
         # Priorité métier SEIN: premier pTNM trouvé dans les 3 mois suivant la date_diag.
         if diagnosis_date is not None:
@@ -1696,8 +1722,14 @@ def select_initial_stage(document_hits: list[dict], diagnosis_date: Optional[str
                 and is_date_in_forward_window(row["date"], diagnosis_date, days=90)
             ]
             if breast_ptnm_3m:
-                chosen = min(breast_ptnm_3m, key=lambda r: parse_date_sort_key(r["date"]))
-                return chosen, "breast_first_ptnm_within_3m_post_diag"
+                chosen = min(
+                    breast_ptnm_3m,
+                    key=lambda r: (
+                        parse_date_sort_key(r["date"]),
+                        breast_document_kind_priority(r["kind"]),
+                    ),
+                )
+                return with_breast_stage(chosen, "breast_first_ptnm_within_3m_post_diag")
 
         breast_window = [row for row in breast_hits if is_date_in_window(row["date"], diagnosis_date, days=62)]
         breast_pool = breast_window if breast_window else breast_hits
@@ -1722,7 +1754,11 @@ def select_initial_stage(document_hits: list[dict], diagnosis_date: Optional[str
         # TN: parcours du plus récent au plus ancien dans la fenêtre
         breast_pool_recent = sorted(
             breast_pool,
-            key=lambda r: (parse_date_sort_key(r["date"]), r["idx"]),
+            key=lambda r: (
+                parse_date_sort_key(r["date"]),
+                -breast_document_kind_priority(r["kind"]),
+                r["idx"],
+            ),
             reverse=True,
         )
 
@@ -1768,9 +1804,9 @@ def select_initial_stage(document_hits: list[dict], diagnosis_date: Optional[str
                 ]
                 if pre:
                     chosen = max(pre, key=lambda r: parse_date_sort_key(r["date"]))
-                    return chosen, "breast_ptnm_primary_surgery"
+                    return with_breast_stage(chosen, "breast_ptnm_primary_surgery")
             chosen = max(ptnm_hits, key=lambda r: parse_date_sort_key(r["date"]))
-            return chosen, "breast_ptnm_primary_surgery"
+            return with_breast_stage(chosen, "breast_ptnm_primary_surgery")
 
         # Priorité 2 : cTNM pré-op (RCP, consultation)
         ctnm_hits = [
@@ -1783,10 +1819,10 @@ def select_initial_stage(document_hits: list[dict], diagnosis_date: Optional[str
                 ctnm_hits,
                 key=lambda r: (
                     parse_date_sort_key(r["date"]),
-                    -document_kind_priority(r["kind"]),
+                    -breast_document_kind_priority(r["kind"]),
                 ),
             )
-            return chosen, "breast_clinical_tnm_pre_treatment"
+            return with_breast_stage(chosen, "breast_clinical_tnm_pre_treatment")
 
         # Fallback sein
         non_meta_breast = [row for row in breast_hits if not row.get("is_metastatic_event")]
@@ -1795,10 +1831,10 @@ def select_initial_stage(document_hits: list[dict], diagnosis_date: Optional[str
                 non_meta_breast,
                 key=lambda r: (
                     parse_date_sort_key(r["date"]),
-                    -document_kind_priority(r["kind"]),
+                    -breast_document_kind_priority(r["kind"]),
                 ),
             )
-            return chosen, "breast_fallback"
+            return with_breast_stage(chosen, "breast_fallback")
 
     # ── PROSTATE (T baseline + consolidation N/M à +90 jours) ───────────────
     prostate_hits = [

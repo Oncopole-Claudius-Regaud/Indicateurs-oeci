@@ -907,6 +907,7 @@ def compute_melanoma_stage(t_value: str, n_value: str, m_value: str, ulcerated: 
 def compute_breast_stage(t_value: str, n_value: str, m_value: str) -> str:
     t = normalize_tnm_component(t_value, "t")
     n = normalize_tnm_component(n_value, "n")
+    # Collapse breast N subcategories for anatomical stage mapping.
     if n.startswith("n3"):
         n = "n3"
     elif n.startswith("n2"):
@@ -914,12 +915,34 @@ def compute_breast_stage(t_value: str, n_value: str, m_value: str) -> str:
     elif n.startswith("n1"):
         n = "n1"
     m = normalize_tnm_component(m_value, "m") or "mx"
+    logic_n = n
+    logic_m = m
 
-    if m.startswith("m1"):
+    if logic_m.startswith("m1"):
         return "Stage IV"
-    if n in {"", "nx"} or m in {"", "mx"}:
+    if logic_n in {"", "nx"} or logic_m in {"", "mx"}:
         return NULL_VALUE
-    return compute_stage(t, n, m)
+    if t == "tis" and logic_n == "n0":
+        return "Stage 0"
+    if t in {"t1", "t1a", "t1b", "t1c", "t1mi"} and logic_n == "n0":
+        return "Stage IA"
+    if t in {"t0", "t1", "t1a", "t1b", "t1c", "t1mi"} and logic_n in {"n1mi"}:
+        return "Stage IB"
+    if (
+        t in {"t0", "t1", "t1a", "t1b", "t1c", "t1mi"} and logic_n == "n1"
+    ) or (t.startswith("t2") and logic_n == "n0"):
+        return "Stage IIA"
+    if (t.startswith("t2") and logic_n == "n1") or (t.startswith("t3") and logic_n == "n0"):
+        return "Stage IIB"
+    if (
+        t.startswith(("t0", "t1", "t2")) and logic_n == "n2"
+    ) or (t.startswith("t3") and logic_n in {"n1", "n2"}):
+        return "Stage IIIA"
+    if t.startswith("t4") and logic_n in {"n0", "n1", "n2"}:
+        return "Stage IIIB"
+    if logic_n == "n3":
+        return "Stage IIIC"
+    return NULL_VALUE
 
 
 def extract_tnm_candidates(text: str, ipp_meta: Optional[IppMetadata]) -> list[TnmCandidate]:
@@ -1539,6 +1562,7 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
         breast_ptnm = extract_breast_pathological_tnm(text)
         if breast_ptnm is not None:
             raw_ptnm, t_ptnm, n_ptnm, m_ptnm = breast_ptnm
+            stage_ptnm = compute_breast_stage(t_ptnm, n_ptnm, m_ptnm)
             return DocumentResult(
                 ipp=ipp,
                 metadata_file=str(metadata_path),
@@ -1550,9 +1574,13 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
                 t=t_ptnm,
                 n=n_ptnm,
                 m=m_ptnm,
-                stage=compute_breast_stage(t_ptnm, n_ptnm, m_ptnm),
-                status="stage_found",
-                reason="Breast pTN detected in text (priority over document kind)",
+                stage=stage_ptnm,
+                status="stage_found" if stage_ptnm != NULL_VALUE else "tnm_found_stage_unknown",
+                reason=(
+                    "Breast pTN detected and stage computed"
+                    if stage_ptnm != NULL_VALUE
+                    else "Breast pTN detected; M missing, kept for breast selection"
+                ),
                 all_tnm_matches="",
                 document_kind=document_kind,
                 tnm_context="breast_pathological_ptnm",
@@ -1965,6 +1993,18 @@ def document_kind_priority(kind: str) -> int:
     return priority.get(kind, 9)
 
 
+def breast_document_kind_priority(kind: str) -> int:
+    priority = {
+        "pathology": 0,
+        "rcp": 1,
+        "consultation": 2,
+        "radiology": 3,
+        "hospitalization": 4,
+        "other": 5,
+    }
+    return priority.get(kind, 9)
+
+
 def choose_surgery_first_pathologic_document(rows: list[DocumentResult]) -> Optional[DocumentResult]:
     candidates = [
         row
@@ -2145,8 +2185,22 @@ def choose_baseline_document(
             return max(non_iv, key=lambda row: stage_rank(row.stage)), "melanoma_best_non_iv"
 
     if is_breast_case:
-        breast_hits = [row for row in ordered if row.stage != NULL_VALUE]
+        breast_hits = [
+            row for row in ordered
+            if row.stage != NULL_VALUE
+            or (
+                row.tnm_context in {"breast_pathological_ptnm", "clinical", "unknown"}
+                and normalize_tnm_component(row.t, "t") not in {"", "tx"}
+                and normalize_tnm_component(row.n, "n") not in {"", "nx"}
+            )
+        ]
         if breast_hits:
+            def with_breast_stage(row: DocumentResult, reason: str, forced_m_value: str = "m0") -> tuple[DocumentResult, str]:
+                m_value = row.m
+                if normalize_tnm_component(m_value, "m") in {"", "mx"}:
+                    m_value = forced_m_value
+                return replace(row, m=m_value, stage=compute_breast_stage(row.t, row.n, m_value)), reason
+
             diag_ref = ""
             if ipp_meta is not None:
                 diag_ref = normalize_diag_date_token(ipp_meta.date_diag_tkc) or normalize_diag_date_token(ipp_meta.date_diag_dcc)
@@ -2160,7 +2214,14 @@ def choose_baseline_document(
                     and is_date_in_forward_window(row.document_date, diag_opt, days=90)
                 ]
                 if breast_ptnm_3m:
-                    return min(breast_ptnm_3m, key=lambda row: parse_date_sort_key(row.document_date)), "breast_first_ptnm_within_3m_post_diag"
+                    chosen = min(
+                        breast_ptnm_3m,
+                        key=lambda row: (
+                            parse_date_sort_key(row.document_date),
+                            breast_document_kind_priority(row.document_kind),
+                        ),
+                    )
+                    return with_breast_stage(chosen, "breast_first_ptnm_within_3m_post_diag")
 
             breast_window = [row for row in breast_hits if is_date_in_window(row.document_date, diag_opt, days=62)]
             breast_pool = breast_window if breast_window else breast_hits
@@ -2180,7 +2241,10 @@ def choose_baseline_document(
 
             breast_pool_recent = sorted(
                 breast_pool,
-                key=lambda row: (parse_date_sort_key(row.document_date), row.document_kind),
+                key=lambda row: (
+                    parse_date_sort_key(row.document_date),
+                    -breast_document_kind_priority(row.document_kind),
+                ),
                 reverse=True,
             )
 
@@ -2203,10 +2267,10 @@ def choose_baseline_document(
                     non_meta_breast,
                     key=lambda row: (
                         parse_date_sort_key(row.document_date),
-                        -({"pathology": 0, "rcp": 1, "consultation": 2, "radiology": 3, "other": 4}.get(row.document_kind, 9)),
+                        -breast_document_kind_priority(row.document_kind),
                     ),
                 )
-                return chosen, "breast_fallback"
+                return with_breast_stage(chosen, "breast_fallback")
 
     valid_non_post = [
         row for row in ordered if row.stage != NULL_VALUE and not is_post_treatment_context(row.tnm_context)
