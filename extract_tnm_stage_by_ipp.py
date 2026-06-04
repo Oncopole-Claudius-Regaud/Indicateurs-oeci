@@ -37,7 +37,7 @@ TNM_PATTERN = re.compile(
     r"(?:\s*[/,;:=-]?\s*)"
     r"((?:[cpyrai]{0,4})?n(?:x|0|1mi|1(?:[abc]|sn)?|2[ab]?|3[abc]?))"
     r"(?:\s*[/,;:=-]?\s*)"
-    r"((?:[cpyrai]{0,4})?m(?:x|0|1[abc]?)?)?",
+    r"((?:[cpyrai]{0,4})?m(?:x|0|1[abcd]?)?)?",
     re.IGNORECASE,
 )
 TNM_LOOSE_PATTERN = re.compile(
@@ -46,7 +46,7 @@ TNM_LOOSE_PATTERN = re.compile(
     r"(?:[\s\S]{0,120}?)"
     r"((?:[cpyrai]{0,4})?n(?:x|0|1mi|1(?:[abc]|sn)?|2[ab]?|3[abc]?))"
     r"(?:[\s\S]{0,80}?)"
-    r"((?:[cpyrai]{0,4})?m(?:x|0|1[abc]?))",
+    r"((?:[cpyrai]{0,4})?m(?:x|0|1[abcd]?))",
     re.IGNORECASE,
 )
 T_TOKEN_PATTERN = re.compile(
@@ -67,7 +67,7 @@ N_COMPONENT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 M_COMPONENT_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9])((?:[cpyrai]{0,4})?m(?:x|0|1[abc]?))(?![A-Za-z0-9])",
+    r"(?<![A-Za-z0-9])((?:[cpyrai]{0,4})?m(?:x|0|1[abcd]?))(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
 TREATMENT_PATTERN = re.compile(
@@ -188,6 +188,30 @@ MELANOMA_METASTASIS_CONFIRMED_PATTERN = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+MELANOMA_M1D_PATTERN = re.compile(
+    r"\b(c[eéè]r[eéè]bral|c[eéè]r[eéè]brale|c[eéè]r[eéè]brales|cerveau|enc[eéè]phal|m[eéè]ning[eéè]?)\b",
+    re.IGNORECASE,
+)
+MELANOMA_M1B_PATTERN = re.compile(r"\b(pulmonaire|pulmonaires|poumon)\b", re.IGNORECASE)
+MELANOMA_M1C_PATTERN = re.compile(
+    r"\b(visc[ée]ral|visc[ée]rale|visc[ée]rales|foie|h[ée]patique|h[ée]patiques|"
+    r"osseuse|osseuses|os|surr[ée]nale|p[ée]riton[ée]ale|pleurale)\b",
+    re.IGNORECASE,
+)
+MELANOMA_M1A_PATTERN = re.compile(
+    r"\b(ganglion\s+non\s+r[ée]gional|ganglionnaire\s+[àa]\s+distance|ad[ée]nopathie\s+[àa]\s+distance|"
+    r"cutan[ée]e\s+[àa]\s+distance|sous[- ]?cutan[ée]e\s+[àa]\s+distance|musculaire\s+[àa]\s+distance|"
+    r"m[ée]diastin|hilaire|r[ée]tro[- ]?p[ée]riton|lombo[- ]?aort|para[- ]?aort)\b",
+    re.IGNORECASE,
+)
+MELANOMA_LDH_HIGH_PATTERN = re.compile(
+    r"\bldh\b.{0,40}\b([eéè]lev[eéè]e?s?|augment[eéè]e?s?|sup[eéè]rieur(?:e)?s?\s+[àa]|haute?s?)\b",
+    re.IGNORECASE,
+)
+MELANOMA_LDH_NORMAL_PATTERN = re.compile(
+    r"\bldh\b.{0,40}\b(normale?s?|non\s+[eéè]lev[eéè]e?s?|dans\s+les\s+normes)\b",
+    re.IGNORECASE,
+)
 MELANOMA_SURVEILLANCE_PATTERN = re.compile(
     r"\b("
     r"surveillance|r[eé]mission\s+compl[eè]te|contr[oô]le|suivi|"
@@ -202,6 +226,11 @@ IMAGING_EVIDENCE_PATTERN = re.compile(
 )
 ULCERATION_PATTERN = re.compile(
     r"\b(ulc[eé]r[eé]|largement\s+ulc[eé]r[eé]|ulc[eé]ration)\b",
+    re.IGNORECASE,
+)
+ULCERATION_ABSENT_PATTERN = re.compile(
+    r"\b(absence\s+d[''’]?\s*ulc[ée]ration|sans\s+ulc[ée]ration|non\s+ulc[ée]r[ée]|"
+    r"ulc[ée]ration\s+absente|pas\s+d[''’]?\s*ulc[ée]ration)\b",
     re.IGNORECASE,
 )
 REGIONAL_NODAL_CONTEXT_PATTERN = re.compile(
@@ -282,11 +311,15 @@ BREAST_CONTEXT_PATTERN = re.compile(
 )
 BREAST_PATHOLOGICAL_TNM_PATTERN = re.compile(
     r"(?<![A-Za-z0-9])"
-    r"(p\s*t(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))"
+    r"(p\s*t\s*(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))"
     r"(?:\s*[/,;:=-]?\s*)"
-    r"(p?\s*n(?:x|0|1mi|1(?:[abc]|sn)?|2[ab]?|3[abc]?))"
+    r"(p?\s*n\s*(?:x|0|1mi|1(?:[abc]|sn)?|2[ab]?|3[abc]?))"
     r"(?:\s*[/,;:=-]?\s*)"
-    r"(p?\s*m(?:x|0|1[abc]?))?",
+    r"(p?\s*m\s*(?:x|0|1[abc]?))?",
+    re.IGNORECASE,
+)
+BREAST_PATHOLOGICAL_T_ONLY_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])(p\s*t\s*(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
 
@@ -621,6 +654,33 @@ def detect_melanoma_metastasis_confirmed(text: str) -> bool:
             continue
         return True
     return False
+
+
+def classify_melanoma_m_subtype(text: str) -> str:
+    if MELANOMA_M1D_PATTERN.search(text):
+        return "m1d"
+    if MELANOMA_M1B_PATTERN.search(text):
+        return "m1b"
+    if MELANOMA_M1C_PATTERN.search(text):
+        return "m1c"
+    if MELANOMA_M1A_PATTERN.search(text):
+        return "m1a"
+    return "m1"
+
+
+def classify_melanoma_ldh_status(text: str) -> str:
+    if MELANOMA_LDH_HIGH_PATTERN.search(text):
+        return "ldh_high"
+    if MELANOMA_LDH_NORMAL_PATTERN.search(text):
+        return "ldh_normal"
+    return "ldh_unknown"
+
+
+def melanoma_metastatic_raw(label: str, text: str) -> str:
+    ldh_status = classify_melanoma_ldh_status(text)
+    if ldh_status == "ldh_unknown":
+        return label
+    return f"{label}; {ldh_status}"
 
 
 def detect_document_kind(metadata: dict, metadata_path: Path, pdf_path: Path) -> str:
@@ -1148,25 +1208,48 @@ def extract_breslow_raw_value(match: re.Match) -> Optional[str]:
     return match.group(1) or match.group(2)
 
 
-def breslow_t_category_with_ulceration(mm: float, ulcerated: bool) -> str:
+def melanoma_ulceration_status(text: str) -> str:
+    if ULCERATION_ABSENT_PATTERN.search(text):
+        return "absent"
+    if ULCERATION_PATTERN.search(text):
+        return "present"
+    return "unknown"
+
+
+def breslow_t_category_with_ulceration(mm: float, ulceration_status: str) -> str:
+    if ulceration_status == "unknown":
+        if mm <= 1.0:
+            return "t1"
+        if mm <= 2.0:
+            return "t2"
+        if mm <= 4.0:
+            return "t3"
+        return "t4"
+    if mm < 0.8:
+        return "t1b" if ulceration_status == "present" else "t1a"
     if mm <= 1.0:
-        return "t1b" if ulcerated else "t1a"
+        return "t1b"
     if mm <= 2.0:
-        return "t2b" if ulcerated else "t2a"
+        return "t2b" if ulceration_status == "present" else "t2a"
     if mm <= 4.0:
-        return "t3b" if ulcerated else "t3a"
-    return "t4b" if ulcerated else "t4a"
+        return "t3b" if ulceration_status == "present" else "t3a"
+    return "t4b" if ulceration_status == "present" else "t4a"
 
 
-def infer_n_from_nodal_context(text: str) -> str:
+def infer_n_from_nodal_context(text: str, has_imaging_evidence: bool = False) -> str:
     if detect_nodal_positive_signal(text) == "yes":
         return "n1"
     if detect_nodal_uncertain_signal(text) == "yes":
         return "nx"
-    return "n0"
+    return "n0" if has_imaging_evidence else "nx"
 
 
-def extract_breslow_stage(text: str, ulcerated: bool, m_value: str) -> Optional[tuple[str, str, str, str, str]]:
+def extract_breslow_stage(
+    text: str,
+    ulceration_status: str,
+    m_value: str,
+    has_imaging_evidence: bool = False,
+) -> Optional[tuple[str, str, str, str, str]]:
     values: list[tuple[float, str]] = []
     for match in BRESLOW_PATTERN.finditer(text):
         raw_value = extract_breslow_raw_value(match)
@@ -1180,15 +1263,17 @@ def extract_breslow_stage(text: str, ulcerated: bool, m_value: str) -> Optional[
         return None
 
     mm, raw = max(values, key=lambda item: item[0])
-    t_value = breslow_t_category_with_ulceration(mm, ulcerated)
-    n_value = infer_n_from_nodal_context(text)
-    stage = compute_melanoma_stage(t_value, n_value, m_value, ulcerated)
-    if stage == NULL_VALUE:
-        return None
+    t_value = breslow_t_category_with_ulceration(mm, ulceration_status)
+    n_value = infer_n_from_nodal_context(text, has_imaging_evidence)
+    stage = compute_melanoma_stage(t_value, n_value, m_value, ulceration_status == "present")
     return raw, t_value, n_value, m_value, stage
 
 
-def extract_melanoma_t_category_stage(text: str, metastasis_detected: str) -> Optional[tuple[str, str, str, str, str]]:
+def extract_melanoma_t_category_stage(
+    text: str,
+    metastasis_detected: str,
+    has_imaging_evidence: bool = False,
+) -> Optional[tuple[str, str, str, str, str]]:
     if not MELANOMA_CONTEXT_PATTERN.search(text):
         return None
     if metastasis_detected == "yes":
@@ -1200,12 +1285,10 @@ def extract_melanoma_t_category_stage(text: str, metastasis_detected: str) -> Op
         return None
 
     t_value = max(t_values, key=t_component_rank)
-    n_value = infer_n_from_nodal_context(text)
-    m_value = "m0"
+    n_value = infer_n_from_nodal_context(text, has_imaging_evidence)
+    m_value = "m0" if has_imaging_evidence else "mx"
     stage = compute_melanoma_stage(t_value, n_value, m_value, ulcerated=False)
-    if stage == NULL_VALUE:
-        return None
-    return f"{t_value.upper()} (melanoma T category inferred N0M0)", t_value, n_value, m_value, stage
+    return f"{t_value.upper()} (melanoma T category inferred with imaging-dependent N/M)", t_value, n_value, m_value, stage
 
 
 def reconstruct_same_document_tnm(text: str) -> Optional[tuple[str, str, str, str]]:
@@ -1308,19 +1391,32 @@ def is_date_in_forward_window(date_str: str, start_str: Optional[str], days: int
 
 def extract_breast_pathological_tnm(text: str) -> Optional[tuple[str, str, str, str]]:
     matches = list(BREAST_PATHOLOGICAL_TNM_PATTERN.finditer(text))
-    if not matches:
+    if matches:
+        best = None
+        best_score = -1
+        for match in matches:
+            t = normalize_tnm_component(match.group(1) or "", "t")
+            n = normalize_tnm_component(match.group(2) or "", "n")
+            m = normalize_tnm_component(match.group(3) or "", "m") or "mx"
+            score = sum(1 for v in (t, n, m) if v and v not in {"tx", "nx", "mx"})
+            if score > best_score:
+                best = (re.sub(r"\s+", " ", match.group(0)).strip(), t, n, m)
+                best_score = score
+        return best
+
+    t_only_matches = list(BREAST_PATHOLOGICAL_T_ONLY_PATTERN.finditer(text))
+    if not t_only_matches:
         return None
-    best = None
-    best_score = -1
-    for match in matches:
-        t = normalize_tnm_component(match.group(1) or "", "t")
-        n = normalize_tnm_component(match.group(2) or "", "n")
-        m = normalize_tnm_component(match.group(3) or "", "m") or "mx"
-        score = sum(1 for v in (t, n, m) if v and v not in {"tx", "nx", "mx"})
-        if score > best_score:
-            best = (re.sub(r"\s+", " ", match.group(0)).strip(), t, n, m)
-            best_score = score
-    return best
+    t_values = [
+        (match, normalize_tnm_component(match.group(1) or "", "t"))
+        for match in t_only_matches
+    ]
+    t_values = [(match, t) for match, t in t_values if t and t != "tx"]
+    if not t_values:
+        return None
+    match, t = max(t_values, key=lambda item: t_component_rank(item[1]))
+    raw = re.sub(r"\s+", " ", match.group(0)).strip()
+    return f"{raw} (breast pT-only inferred N0M0)", t, "n0", "m0"
 
 
 def blank_stage_row(row: DocumentResult, reason: str, status: str = "no_pre_treatment_stage_found") -> DocumentResult:
@@ -1492,7 +1588,7 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
     is_melanoma = bool(MELANOMA_CONTEXT_PATTERN.search(text))
     melanoma_nodal_signal = detect_melanoma_nodal_signal(text) if is_melanoma else "unknown"
     has_imaging_evidence = detect_imaging_evidence(text, document_kind) if is_melanoma else False
-    ulcerated = bool(ULCERATION_PATTERN.search(text)) if is_melanoma else False
+    ulceration_status = melanoma_ulceration_status(text) if is_melanoma else "unknown"
     melanoma_meta_confirmed = detect_melanoma_metastasis_confirmed(text) if is_melanoma else False
 
     if is_melanoma and melanoma_meta_confirmed:
@@ -1507,6 +1603,7 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
         metastasis_detected = "yes"
 
     if is_melanoma and melanoma_meta_confirmed:
+        melanoma_m_value = classify_melanoma_m_subtype(text)
         return DocumentResult(
             ipp=ipp,
             metadata_file=str(metadata_path),
@@ -1514,10 +1611,10 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
             document_date=document_date,
             visit_number=visit_number,
             text_length=len(text),
-            tnm_raw="melanoma_metastatic_signal_confirmed",
+            tnm_raw=melanoma_metastatic_raw("melanoma_metastatic_signal_confirmed", text),
             t=NULL_VALUE,
             n=NULL_VALUE,
-            m="m1",
+            m=melanoma_m_value,
             stage=metastatic_stage(),
             status="stage_found",
             reason="Melanoma metastasis confirmed",
@@ -1533,6 +1630,7 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
         )
 
     if metastasis_detected == "yes":
+        metastatic_m_value = classify_melanoma_m_subtype(text) if is_melanoma else "m1"
         return DocumentResult(
             ipp=ipp,
             metadata_file=str(metadata_path),
@@ -1540,10 +1638,10 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
             document_date=document_date,
             visit_number=visit_number,
             text_length=len(text),
-            tnm_raw="metastatic_signal",
+            tnm_raw=melanoma_metastatic_raw("metastatic_signal", text) if is_melanoma else "metastatic_signal",
             t=NULL_VALUE,
             n=NULL_VALUE,
-            m="m1",
+            m=metastatic_m_value,
             stage=metastatic_stage(),
             status="stage_found",
             reason="Metastatic mention found in document",
@@ -1647,8 +1745,8 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
         )
 
     if is_melanoma and metastasis_detected == "no" and melanoma_nodal_signal != "positive":
-        m_value = "m0"
-        breslow_stage = extract_breslow_stage(text, ulcerated, m_value)
+        m_value = "m0" if has_imaging_evidence else "mx"
+        breslow_stage = extract_breslow_stage(text, ulceration_status, m_value, has_imaging_evidence)
         if breslow_stage is not None:
             raw_breslow, t_value, n_value, m_value, stage = breslow_stage
             return DocumentResult(
@@ -1663,8 +1761,12 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
                 n=n_value,
                 m=m_value,
                 stage=stage,
-                status="stage_found",
-                reason="Melanoma context: stage inferred from Breslow with implicit N0/M0 when no nodal/metastatic signal is found",
+                status="stage_found" if stage != NULL_VALUE else "tnm_found_stage_unknown",
+                reason=(
+                    "Melanoma context: stage inferred from Breslow with imaging-supported N0/M0"
+                    if stage != NULL_VALUE
+                    else "Melanoma context: Breslow found; N/M kept unknown without imaging evidence"
+                ),
                 all_tnm_matches="",
                 document_kind=document_kind,
                 tnm_context="breslow_fallback",
@@ -1675,7 +1777,7 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
                 radiotherapy_detected=radiotherapy_detected,
                 metastasis_detected=metastasis_detected,
             )
-        melanoma_t_stage = extract_melanoma_t_category_stage(text, metastasis_detected)
+        melanoma_t_stage = extract_melanoma_t_category_stage(text, metastasis_detected, has_imaging_evidence)
         if melanoma_t_stage is not None:
             raw_tnm, t_value, n_value, m_value, stage = melanoma_t_stage
             return DocumentResult(
@@ -1690,8 +1792,12 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
                 n=n_value,
                 m=m_value,
                 stage=stage,
-                status="stage_found",
-                reason="Melanoma context: stage inferred from explicit T category with implicit N0/M0",
+                status="stage_found" if stage != NULL_VALUE else "tnm_found_stage_unknown",
+                reason=(
+                    "Melanoma context: stage inferred from explicit T category with imaging-supported N0/M0"
+                    if stage != NULL_VALUE
+                    else "Melanoma context: explicit T category found; N/M kept unknown without imaging evidence"
+                ),
                 all_tnm_matches="",
                 document_kind=document_kind,
                 tnm_context="breslow_fallback",
@@ -1782,7 +1888,7 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
             )
 
         fallback_m = "m0" if has_imaging_evidence else "mx" if is_melanoma else "m0"
-        breslow_stage = extract_breslow_stage(text, ulcerated if is_melanoma else False, fallback_m)
+        breslow_stage = extract_breslow_stage(text, ulceration_status, fallback_m, has_imaging_evidence)
         if breslow_stage is not None:
             raw_breslow, t_value, n_value, m_value, stage = breslow_stage
             return DocumentResult(
@@ -1797,8 +1903,12 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
                 n=n_value,
                 m=m_value,
                 stage=stage,
-                status="stage_found",
-                reason="Stage inferred from Breslow thickness fallback",
+                status="stage_found" if stage != NULL_VALUE else "tnm_found_stage_unknown",
+                reason=(
+                    "Stage inferred from Breslow thickness fallback"
+                    if stage != NULL_VALUE
+                    else "Breslow thickness fallback found; N/M kept unknown without imaging evidence"
+                ),
                 all_tnm_matches="",
                 document_kind=document_kind,
                 tnm_context="breslow_fallback",
@@ -1849,7 +1959,7 @@ def build_document_result(metadata_path: Path, ipp_meta: Optional[IppMetadata]) 
     # si TNM présent mais non stadifiable, tenter l'inférence N0/M0 (hors signal nodal+/métastatique).
     if final_stage == NULL_VALUE and is_prostate and chosen.t not in {"", NULL_VALUE, "tx"}:
         n_known = final_n not in {"", NULL_VALUE, "nx"}
-        m_known = normalize_tnm_component(final_m, "m") in {"m0", "m1", "m1a", "m1b", "m1c"}
+        m_known = normalize_tnm_component(final_m, "m") in {"m0", "m1", "m1a", "m1b", "m1c", "m1d"}
         if (
             n_known
             or (
@@ -2167,14 +2277,20 @@ def choose_baseline_document(
             n_values = [normalize_tnm_component(row.n, "n") for row in window_hits]
             if any(n in {"n1", "n1a", "n1b", "n2", "n2a", "n2b", "n3", "n3a", "n3b", "n3c"} for n in n_values):
                 chosen_n = next(n for n in n_values if n in {"n1", "n1a", "n1b", "n2", "n2a", "n2b", "n3", "n3a", "n3b", "n3c"})
-                return replace(chosen, n=chosen_n, m="m0", stage=compute_melanoma_stage(chosen.t, chosen_n, "m0", False)), "melanoma_breslow_plus90d_nodal_positive"
+                chosen_m = "m0" if any(normalize_tnm_component(row.m, "m") == "m0" for row in window_hits) else normalize_tnm_component(chosen.m, "m")
+                if chosen_m not in {"m0", "m1", "m1a", "m1b", "m1c", "m1d"}:
+                    chosen_m = "mx"
+                return replace(chosen, n=chosen_n, m=chosen_m, stage=compute_melanoma_stage(chosen.t, chosen_n, chosen_m, False)), "melanoma_breslow_plus90d_nodal_positive"
 
+            has_imaging_window = any(normalize_tnm_component(row.m, "m") == "m0" for row in window_hits)
+            chosen_n = "n0" if has_imaging_window else "nx"
+            chosen_m = "m0" if has_imaging_window else "mx"
             return replace(
                 chosen,
-                n="n0",
-                m="m0",
-                stage=compute_melanoma_stage(chosen.t, "n0", "m0", False),
-            ), "melanoma_breslow_plus90d_implicit_n0m0"
+                n=chosen_n,
+                m=chosen_m,
+                stage=compute_melanoma_stage(chosen.t, chosen_n, chosen_m, False),
+            ), "melanoma_breslow_plus90d_imaging_n0m0" if has_imaging_window else "melanoma_breslow_plus90d_nxmx_no_imaging"
 
         non_meta = [row for row in valid if row.tnm_context != "metastatic_clinical" and row.stage != "Stage IV"]
         if non_meta:
