@@ -734,6 +734,26 @@ def load_ipp_stade_task(
     df["metastasis_detected_bool"] = _series_or_default(df, "metastasis_detected").apply(_parse_bool_value)
     df["documents_seen_int"] = _series_or_default(df, "documents_seen").apply(_parse_int_value)
     df["documents_with_stage_int"] = _series_or_default(df, "documents_with_stage").apply(_parse_int_value)
+    df["stage_confidence"] = _series_or_default(df, "stage_confidence")
+    df["histology_type"] = _series_or_default(df, "histology_type")
+    df["grade_sbr_int"] = _series_or_default(df, "grade_sbr").apply(_parse_int_value)
+    df["sbr_tubule_score_int"] = _series_or_default(df, "sbr_tubule_score").apply(_parse_int_value)
+    df["sbr_nuclear_score_int"] = _series_or_default(df, "sbr_nuclear_score").apply(_parse_int_value)
+    df["sbr_mitotic_score_int"] = _series_or_default(df, "sbr_mitotic_score").apply(_parse_int_value)
+    df["er_percent_int"] = _series_or_default(df, "er_percent").apply(_parse_int_value)
+    df["er_intensity"] = _series_or_default(df, "er_intensity")
+    df["er_status"] = _series_or_default(df, "er_status")
+    df["pr_percent_int"] = _series_or_default(df, "pr_percent").apply(_parse_int_value)
+    df["pr_intensity"] = _series_or_default(df, "pr_intensity")
+    df["pr_status"] = _series_or_default(df, "pr_status")
+    df["hormone_receptor_status_project"] = _series_or_default(df, "hormone_receptor_status_project")
+    df["her2_ihc_score"] = _series_or_default(df, "her2_ihc_score")
+    df["her2_ish_result"] = _series_or_default(df, "her2_ish_result")
+    df["her2_status"] = _series_or_default(df, "her2_status")
+    df["her2_qualification_project"] = _series_or_default(df, "her2_qualification_project")
+    df["pdl1_cps_value_int"] = _series_or_default(df, "pdl1_cps_value").apply(_parse_int_value)
+    df["pdl1_cps_status_project"] = _series_or_default(df, "pdl1_cps_status_project")
+    df["breast_anapath_sources"] = _series_or_default(df, "breast_anapath_sources")
 
     hook = PostgresHook(postgres_conn_id=conn_id)
     pg_conn = hook.get_conn()
@@ -767,6 +787,26 @@ def load_ipp_stade_task(
         "documents_seen",
         "documents_with_stage",
         "last_update",
+        "stage_confidence",
+        "histology_type",
+        "grade_sbr",
+        "sbr_tubule_score",
+        "sbr_nuclear_score",
+        "sbr_mitotic_score",
+        "er_percent",
+        "er_intensity",
+        "er_status",
+        "pr_percent",
+        "pr_intensity",
+        "pr_status",
+        "hormone_receptor_status_project",
+        "her2_ihc_score",
+        "her2_ish_result",
+        "her2_status",
+        "her2_qualification_project",
+        "pdl1_cps_value",
+        "pdl1_cps_status_project",
+        "breast_anapath_sources",
     ]
 
     try:
@@ -818,6 +858,26 @@ def load_ipp_stade_task(
                     row.get("documents_seen_int"),
                     row.get("documents_with_stage_int"),
                     last_update,
+                    _normalize_text(row.get("stage_confidence")),
+                    _normalize_text(row.get("histology_type")),
+                    row.get("grade_sbr_int"),
+                    row.get("sbr_tubule_score_int"),
+                    row.get("sbr_nuclear_score_int"),
+                    row.get("sbr_mitotic_score_int"),
+                    row.get("er_percent_int"),
+                    _normalize_text(row.get("er_intensity")),
+                    _normalize_text(row.get("er_status")),
+                    row.get("pr_percent_int"),
+                    _normalize_text(row.get("pr_intensity")),
+                    _normalize_text(row.get("pr_status")),
+                    _normalize_text(row.get("hormone_receptor_status_project")),
+                    _normalize_text(row.get("her2_ihc_score")),
+                    _normalize_text(row.get("her2_ish_result")),
+                    _normalize_text(row.get("her2_status")),
+                    _normalize_text(row.get("her2_qualification_project")),
+                    row.get("pdl1_cps_value_int"),
+                    _normalize_text(row.get("pdl1_cps_status_project")),
+                    _normalize_text(row.get("breast_anapath_sources")),
                 ))
 
             if rows:
@@ -859,7 +919,27 @@ def load_ipp_stade_task(
                         metastasis_detected,
                         documents_seen,
                         documents_with_stage,
-                        last_update
+                        last_update,
+                        stage_confidence,
+                        histology_type,
+                        grade_sbr,
+                        sbr_tubule_score,
+                        sbr_nuclear_score,
+                        sbr_mitotic_score,
+                        er_percent,
+                        er_intensity,
+                        er_status,
+                        pr_percent,
+                        pr_intensity,
+                        pr_status,
+                        hormone_receptor_status_project,
+                        her2_ihc_score,
+                        her2_ish_result,
+                        her2_status,
+                        her2_qualification_project,
+                        pdl1_cps_value,
+                        pdl1_cps_status_project,
+                        breast_anapath_sources
                     )
                     VALUES %s
                     ON CONFLICT (ipp) DO UPDATE
@@ -887,7 +967,27 @@ def load_ipp_stade_task(
                             metastasis_detected   = EXCLUDED.metastasis_detected,
                             documents_seen        = EXCLUDED.documents_seen,
                             documents_with_stage  = EXCLUDED.documents_with_stage,
-                            last_update           = EXCLUDED.last_update
+                            last_update           = EXCLUDED.last_update,
+                            stage_confidence      = EXCLUDED.stage_confidence,
+                            histology_type        = EXCLUDED.histology_type,
+                            grade_sbr             = EXCLUDED.grade_sbr,
+                            sbr_tubule_score      = EXCLUDED.sbr_tubule_score,
+                            sbr_nuclear_score     = EXCLUDED.sbr_nuclear_score,
+                            sbr_mitotic_score     = EXCLUDED.sbr_mitotic_score,
+                            er_percent            = EXCLUDED.er_percent,
+                            er_intensity          = EXCLUDED.er_intensity,
+                            er_status             = EXCLUDED.er_status,
+                            pr_percent            = EXCLUDED.pr_percent,
+                            pr_intensity          = EXCLUDED.pr_intensity,
+                            pr_status             = EXCLUDED.pr_status,
+                            hormone_receptor_status_project = EXCLUDED.hormone_receptor_status_project,
+                            her2_ihc_score        = EXCLUDED.her2_ihc_score,
+                            her2_ish_result       = EXCLUDED.her2_ish_result,
+                            her2_status           = EXCLUDED.her2_status,
+                            her2_qualification_project = EXCLUDED.her2_qualification_project,
+                            pdl1_cps_value        = EXCLUDED.pdl1_cps_value,
+                            pdl1_cps_status_project = EXCLUDED.pdl1_cps_status_project,
+                            breast_anapath_sources = EXCLUDED.breast_anapath_sources
                 """
                 execute_values(cur, insert_sql, rows, page_size=500)
                 logger.info("INSERT %d lignes dans %s", len(rows), full_table)

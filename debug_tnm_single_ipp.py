@@ -238,6 +238,46 @@ BREAST_PATHOLOGICAL_T_ONLY_PATTERN = re.compile(
     r"(?<![A-Za-z0-9])(p\s*t\s*(?:is|x|0|1mi|1[abc]?|2[abc]?|3[abc]?|4[abcd]?))(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
+DEBUG_BREAST_HISTOLOGY_PATTERNS: list[tuple[str, re.Pattern]] = [
+    ("NST", re.compile(r"\b(carcinome\s+canalaire\s+infiltrant|carcinome\s+infiltrant(?:\s+du\s+sein(?:\s+\w+)?)?\s+de\s+type\s+non\s+sp[eé]cifique|carcinome\s+infiltrant\s+nst|carcinome\s+mammaire\s+infiltrant\s+nst|carcinome\s+invasif\s+nst|carcinome\s+infiltrant\s+sans\s+autre\s+sp[eé]cification|carcinome\s+canalaire\s+invasif|cci)\b", re.IGNORECASE)),
+    ("LOBULAR", re.compile(r"\b(carcinome\s+lobulaire\s+infiltrant|carcinome\s+lobulaire\s+invasif|lobulaire\s+infiltrant|lobulaire\s+invasif|cli)\b", re.IGNORECASE)),
+    ("MUCINOUS", re.compile(r"\b(mucineux|collo[iï]de)\b", re.IGNORECASE)),
+    ("TUBULAR", re.compile(r"\btubuleux\b", re.IGNORECASE)),
+    ("CRIBRIFORM", re.compile(r"\bcribriforme\b", re.IGNORECASE)),
+    ("PAPILLARY", re.compile(r"\bpapillaire\b", re.IGNORECASE)),
+    ("MICROPAPILLARY", re.compile(r"\bmicropapillaire\b", re.IGNORECASE)),
+    ("METAPLASTIC", re.compile(r"\b(m[eé]taplasique|sarcomato[iï]de|m[eé]senchymateux|sarcome)\b", re.IGNORECASE)),
+    ("APOCRINE", re.compile(r"\bapocrine\b", re.IGNORECASE)),
+    ("NEUROENDOCRINE", re.compile(r"\bneuroendocrine\b", re.IGNORECASE)),
+    ("OTHER_SPECIFIED", re.compile(r"\b(ad[eé]no[iï]de\s+kystique|s[eé]cr[eé]toire|m[eé]dullaire)\b", re.IGNORECASE)),
+]
+DEBUG_BREAST_IN_SITU_PATTERN = re.compile(r"\b(carcinome\s+(?:canalaire|lobulaire)?\s*in\s+situ|ccis|clis)\b", re.IGNORECASE)
+DEBUG_BREAST_INFILTRATING_PATTERN = re.compile(r"\b(infiltrant|invasif|invasive)\b", re.IGNORECASE)
+DEBUG_BREAST_HISTOLOGY_EXCLUSION_PATTERN = re.compile(r"\b(absence\s+de\s+carcinome\s+infiltrant|ccis\s+seul|clis\s+seul|in\s+situ\s+pur)\b", re.IGNORECASE)
+DEBUG_BREAST_GRADE_PATTERN = re.compile(r"\b(?:grade(?:\s+(?:sbr|histopronostique|histologique|tumoral))?|sbr|scarff\s+bloom\s+richardson|elston(?:\s+et)?\s+ellis)\s*(?:de\s+)?(?:grade\s*)?(i{1,3}|[123])\b", re.IGNORECASE)
+DEBUG_BREAST_GRADE_DETAIL_PATTERN = re.compile(r"\b(?:grade(?:\s+(?:sbr|histopronostique|histologique|tumoral))?|sbr|elston(?:\s+et)?\s+ellis)[^\n\r()]{0,80}\(([123])\s*,\s*([123])\s*,\s*([123])\)", re.IGNORECASE)
+DEBUG_BREAST_ER_MARKER = r"(?:\bre\b|\ber\b|r[ée]cepteurs?\s+(?:des\s+|aux\s+)?[œo]strog[eéè]nes?|r[ée]cepteurs?\s+estrog[eé]niques?)"
+DEBUG_BREAST_PR_MARKER = r"(?:\brp\b|\bpr\b|r[ée]cepteurs?\s+(?:de\s+la\s+|[àa]\s+la\s+)?progest[eéè]rone|r[ée]cepteurs?\s+progest[eéè]roniques?)"
+DEBUG_BREAST_ER_PERCENT_PATTERN = re.compile(DEBUG_BREAST_ER_MARKER + r"[\s\S]{0,120}?\b(100|[1-9]?[0-9])\s*%", re.IGNORECASE)
+DEBUG_BREAST_PR_PERCENT_PATTERN = re.compile(DEBUG_BREAST_PR_MARKER + r"[\s\S]{0,120}?\b(100|[1-9]?[0-9])\s*%", re.IGNORECASE)
+DEBUG_BREAST_ER_INTENSITY_PATTERN = re.compile(DEBUG_BREAST_ER_MARKER + r"[\s\S]{0,140}?\bintensit[eé]\s*(?:[:=]?\s*)?(0|\+\+\+|\+\+|\+|faible|mod[ée]r[ée]e?|forte?|intense)", re.IGNORECASE)
+DEBUG_BREAST_PR_INTENSITY_PATTERN = re.compile(DEBUG_BREAST_PR_MARKER + r"[\s\S]{0,140}?\bintensit[eé]\s*(?:[:=]?\s*)?(0|\+\+\+|\+\+|\+|faible|mod[ée]r[ée]e?|forte?|intense)", re.IGNORECASE)
+DEBUG_BREAST_ER_POSITIVE_PATTERN = re.compile(r"\b(re\+|er\+|re\s+positif|er\s+positif|r[ée]cepteurs?\s+(?:aux\s+)?[œo]strog[eè]nes?\s+positifs?|hormonor[ée]cepteur\s+positif)\b", re.IGNORECASE)
+DEBUG_BREAST_ER_NEGATIVE_PATTERN = re.compile(r"\b(re-|er-|re\s+n[ée]gatif|er\s+n[ée]gatif|r[ée]cepteurs?\s+(?:aux\s+)?[œo]strog[eè]nes?\s+n[ée]gatifs?)\b", re.IGNORECASE)
+DEBUG_BREAST_PR_POSITIVE_PATTERN = re.compile(r"\b(rp\+|pr\+|rp\s+positif|pr\s+positif|r[ée]cepteurs?\s+(?:[àa]\s+la\s+)?progest[ée]rone\s+positifs?)\b", re.IGNORECASE)
+DEBUG_BREAST_PR_NEGATIVE_PATTERN = re.compile(r"\b(rp-|pr-|rp\s+n[ée]gatif|pr\s+n[ée]gatif|r[ée]cepteurs?\s+(?:[àa]\s+la\s+)?progest[ée]rone\s+n[ée]gatifs?)\b", re.IGNORECASE)
+DEBUG_BREAST_RH_POSITIVE_PATTERN = re.compile(r"\b(rh\+|hr\+|rh\s+positif|hr\s+positif|r[ée]cepteurs?\s+hormonaux\s+positifs?|hormonod[ée]pendant|luminal)\b", re.IGNORECASE)
+DEBUG_BREAST_RH_NEGATIVE_PATTERN = re.compile(r"\b(rh-|hr-|rh\s+n[ée]gatif|hr\s+n[ée]gatif|r[ée]cepteurs?\s+hormonaux\s+n[ée]gatifs?|non\s+hormonod[ée]pendant)\b", re.IGNORECASE)
+DEBUG_BREAST_TRIPLE_NEGATIVE_PATTERN = re.compile(r"\b(triple\s+n[ée]gatif|triple-negative|tnbc)\b", re.IGNORECASE)
+DEBUG_BREAST_HER2_IHC_PATTERN = re.compile(r"\b(?:her[\s-]?2|erbb2|c-?erbb2)\b[\s\S]{0,180}?\b(?:score\s*)?(0\+?|1\+|2\+|3\+)", re.IGNORECASE)
+DEBUG_BREAST_HER2_POSITIVE_PATTERN = re.compile(r"\b(her[\s-]?2\+|her[\s-]?2\s+positif|her[\s-]?2\s+amplifi[ée]|surexpression\s+her[\s-]?2|her[\s-]?2\s+surexprim[ée])\b", re.IGNORECASE)
+DEBUG_BREAST_HER2_LOW_PATTERN = re.compile(r"\b(her[\s-]?2\s*low|her[\s-]?2-low|her[\s-]?2\s+faible|her[\s-]?2\s+1\+|her[\s-]?2\s+2\+\s+non\s+amplifi[ée])\b", re.IGNORECASE)
+DEBUG_BREAST_HER2_NEGATIVE_PATTERN = re.compile(r"\b(her[\s-]?2-|her[\s-]?2\s+n[ée]gatif|her[\s-]?2\s+non\s+amplifi[ée])\b", re.IGNORECASE)
+DEBUG_BREAST_HER2_ISH_AMPLIFIED_PATTERN = re.compile(r"\b(?:her[\s-]?2|erbb2|c-?erbb2)\b[\s\S]{0,160}?\b(?:ish|fish|cish|sish|hybridation\s+in\s+situ)\b[\s\S]{0,160}?\b(amplifi[ée]|amplification|ratio\s+amplifi[ée]|positif)\b", re.IGNORECASE)
+DEBUG_BREAST_HER2_ISH_NOT_AMPLIFIED_PATTERN = re.compile(r"\b(?:her[\s-]?2|erbb2|c-?erbb2)\b[\s\S]{0,160}?\b(?:ish|fish|cish|sish|hybridation\s+in\s+situ)\b[\s\S]{0,160}?\b(non\s+amplifi[ée]|absence\s+d['’]amplification|n[ée]gatif)\b", re.IGNORECASE)
+DEBUG_BREAST_HER2_ULTRALOW_PATTERN = re.compile(r"\b(ultra-?low|marquage\s+membranaire\s+tr[eè]s\s+faible|marquage\s+incomplet\s+faible|her[\s-]?2\s+0\s+avec\s+marquage\s+faible)\b", re.IGNORECASE)
+DEBUG_BREAST_HER2_NULL_PATTERN = re.compile(r"\b(her[\s-]?2\s+0|ihc\s+0|absence\s+totale\s+de\s+marquage|aucun\s+marquage\s+membranaire|her[\s-]?2\s+nul)\b", re.IGNORECASE)
+DEBUG_BREAST_PDL1_CPS_PATTERN = re.compile(r"\b(?:pd[\s-]?l1|pd\s*l1)\b[\s\S]{0,120}?\b(?:cps|combined\s+positive\s+score|score\s+combin[ée]\s+positif)\s*(?:[=:]?\s*|[<>≥≤]\s*)([0-9]+)", re.IGNORECASE)
 # Grade SBR/Elston-Ellis
 GRADE_SBR_PATTERN = re.compile(
     r"\b(?:grade|gr\.?)\s*(?:sbr\s*)?([1-3])\b",
@@ -1275,6 +1315,245 @@ def extract_breast_pathological_tnm(text: str) -> Optional[tuple[str, str, str, 
     return f"{raw} (breast pT-only inferred N0M0)", t, "n0", "m0"
 
 
+def debug_empty_breast_anapath_values() -> dict[str, str]:
+    return {
+        "histology_type": "null",
+        "grade_sbr": "null",
+        "sbr_tubule_score": "null",
+        "sbr_nuclear_score": "null",
+        "sbr_mitotic_score": "null",
+        "er_percent": "null",
+        "er_intensity": "null",
+        "er_status": "null",
+        "pr_percent": "null",
+        "pr_intensity": "null",
+        "pr_status": "null",
+        "hormone_receptor_status_project": "null",
+        "her2_ihc_score": "null",
+        "her2_ish_result": "null",
+        "her2_status": "null",
+        "her2_qualification_project": "null",
+        "pdl1_cps_value": "null",
+        "pdl1_cps_status_project": "null",
+        "breast_anapath_sources": "null",
+    }
+
+
+def debug_normalize_grade(value: str) -> Optional[int]:
+    value = (value or "").strip().lower()
+    if value in {"1", "i"}:
+        return 1
+    if value in {"2", "ii"}:
+        return 2
+    if value in {"3", "iii"}:
+        return 3
+    return None
+
+
+def debug_normalize_intensity(value: str) -> str:
+    value = (value or "").strip().lower()
+    if value == "0":
+        return "0"
+    if value in {"+", "++", "+++"}:
+        return value
+    if value == "faible":
+        return "+"
+    if value.startswith("mod"):
+        return "++"
+    if value.startswith("fort") or value == "intense":
+        return "+++"
+    return "null"
+
+
+def debug_intensity_rank(value: str) -> int:
+    return {"0": 0, "+": 1, "++": 2, "+++": 3}.get(value, -1)
+
+
+def debug_her2_score_rank(value: str) -> int:
+    return {"0": 0, "1+": 1, "2+": 2, "3+": 3}.get(value, -1)
+
+
+def debug_normalize_her2_score(value: str) -> str:
+    value = (value or "").strip().replace(" ", "")
+    if value in {"0", "0+"}:
+        return "0"
+    if value in {"1+", "2+", "3+"}:
+        return value
+    return "null"
+
+
+def debug_extract_breast_anapath_values(text: str) -> dict[str, str]:
+    values = debug_empty_breast_anapath_values()
+    values.pop("breast_anapath_sources")
+    if not DEBUG_BREAST_HISTOLOGY_EXCLUSION_PATTERN.search(text):
+        histologies = [code for code, pattern in DEBUG_BREAST_HISTOLOGY_PATTERNS if pattern.search(text)]
+        if "NST" in histologies and "LOBULAR" in histologies:
+            values["histology_type"] = "MIXED_NST_LOBULAR"
+        elif histologies:
+            values["histology_type"] = histologies[0]
+    if values["histology_type"] == "null" and DEBUG_BREAST_IN_SITU_PATTERN.search(text) and not DEBUG_BREAST_INFILTRATING_PATTERN.search(text):
+        values["histology_type"] = "IN_SITU"
+    grades = [debug_normalize_grade(match.group(1)) for match in DEBUG_BREAST_GRADE_PATTERN.finditer(text)]
+    grades = [grade for grade in grades if grade is not None]
+    if grades:
+        values["grade_sbr"] = str(max(grades))
+    details = [(int(m.group(1)), int(m.group(2)), int(m.group(3))) for m in DEBUG_BREAST_GRADE_DETAIL_PATTERN.finditer(text)]
+    if details:
+        tubule, nuclear, mitotic = max(details, key=lambda item: sum(item))
+        values["sbr_tubule_score"] = str(tubule)
+        values["sbr_nuclear_score"] = str(nuclear)
+        values["sbr_mitotic_score"] = str(mitotic)
+    er_percents = [int(match.group(1)) for match in DEBUG_BREAST_ER_PERCENT_PATTERN.finditer(text)]
+    pr_percents = [int(match.group(1)) for match in DEBUG_BREAST_PR_PERCENT_PATTERN.finditer(text)]
+    if er_percents:
+        values["er_percent"] = str(max(er_percents))
+        values["er_status"] = "POSITIVE" if max(er_percents) >= 10 else "NEGATIVE"
+    elif DEBUG_BREAST_ER_POSITIVE_PATTERN.search(text):
+        values["er_status"] = "POSITIVE"
+    elif DEBUG_BREAST_ER_NEGATIVE_PATTERN.search(text):
+        values["er_status"] = "NEGATIVE"
+    if pr_percents:
+        values["pr_percent"] = str(max(pr_percents))
+        values["pr_status"] = "POSITIVE" if max(pr_percents) >= 10 else "NEGATIVE"
+    elif DEBUG_BREAST_PR_POSITIVE_PATTERN.search(text):
+        values["pr_status"] = "POSITIVE"
+    elif DEBUG_BREAST_PR_NEGATIVE_PATTERN.search(text):
+        values["pr_status"] = "NEGATIVE"
+    er_intensities = [debug_normalize_intensity(match.group(1)) for match in DEBUG_BREAST_ER_INTENSITY_PATTERN.finditer(text)]
+    er_intensities = [value for value in er_intensities if value != "null"]
+    pr_intensities = [debug_normalize_intensity(match.group(1)) for match in DEBUG_BREAST_PR_INTENSITY_PATTERN.finditer(text)]
+    pr_intensities = [value for value in pr_intensities if value != "null"]
+    if er_intensities:
+        values["er_intensity"] = max(er_intensities, key=debug_intensity_rank)
+    if pr_intensities:
+        values["pr_intensity"] = max(pr_intensities, key=debug_intensity_rank)
+    if values["er_status"] == "POSITIVE" or values["pr_status"] == "POSITIVE":
+        values["hormone_receptor_status_project"] = "POSITIVE"
+    elif values["er_status"] == "NEGATIVE" and values["pr_status"] == "NEGATIVE":
+        values["hormone_receptor_status_project"] = "NEGATIVE"
+    elif DEBUG_BREAST_RH_POSITIVE_PATTERN.search(text):
+        values["hormone_receptor_status_project"] = "POSITIVE"
+    elif DEBUG_BREAST_RH_NEGATIVE_PATTERN.search(text) or DEBUG_BREAST_TRIPLE_NEGATIVE_PATTERN.search(text):
+        values["hormone_receptor_status_project"] = "NEGATIVE"
+    her2_scores = [debug_normalize_her2_score(match.group(1)) for match in DEBUG_BREAST_HER2_IHC_PATTERN.finditer(text)]
+    her2_scores = [score for score in her2_scores if score != "null"]
+    if her2_scores:
+        values["her2_ihc_score"] = max(her2_scores, key=debug_her2_score_rank)
+    if DEBUG_BREAST_HER2_ISH_NOT_AMPLIFIED_PATTERN.search(text):
+        values["her2_ish_result"] = "NOT_AMPLIFIED"
+    elif DEBUG_BREAST_HER2_ISH_AMPLIFIED_PATTERN.search(text) or DEBUG_BREAST_HER2_POSITIVE_PATTERN.search(text):
+        values["her2_ish_result"] = "AMPLIFIED" if DEBUG_BREAST_HER2_ISH_AMPLIFIED_PATTERN.search(text) else values["her2_ish_result"]
+        values["her2_status"] = "POSITIVE"
+    elif DEBUG_BREAST_HER2_NEGATIVE_PATTERN.search(text):
+        values["her2_status"] = "NEGATIVE"
+    if values["her2_ihc_score"] == "3+" or values["her2_ish_result"] == "AMPLIFIED":
+        values["her2_status"] = "POSITIVE"
+        values["her2_qualification_project"] = "POSITIVE"
+    elif values["her2_ihc_score"] == "2+" and values["her2_ish_result"] == "NOT_AMPLIFIED":
+        values["her2_status"] = "NEGATIVE"
+        values["her2_qualification_project"] = "LOW"
+    elif values["her2_ihc_score"] == "1+" or DEBUG_BREAST_HER2_LOW_PATTERN.search(text):
+        values["her2_status"] = "NEGATIVE" if values["her2_status"] == "null" else values["her2_status"]
+        values["her2_qualification_project"] = "LOW"
+    elif DEBUG_BREAST_HER2_ULTRALOW_PATTERN.search(text):
+        values["her2_qualification_project"] = "ULTRALOW"
+    elif values["her2_ihc_score"] == "0" or DEBUG_BREAST_HER2_NULL_PATTERN.search(text):
+        values["her2_status"] = "NEGATIVE" if values["her2_status"] == "null" else values["her2_status"]
+        values["her2_qualification_project"] = "HER2_NULL"
+    elif DEBUG_BREAST_TRIPLE_NEGATIVE_PATTERN.search(text):
+        values["her2_status"] = "NEGATIVE"
+    cps_values = [int(match.group(1)) for match in DEBUG_BREAST_PDL1_CPS_PATTERN.finditer(text)]
+    if cps_values:
+        cps = max(cps_values)
+        values["pdl1_cps_value"] = str(cps)
+        values["pdl1_cps_status_project"] = "POSITIVE" if cps >= 10 else "NEGATIVE"
+    return values
+
+
+def debug_merge_breast_anapath_values(current: dict[str, str], incoming: dict[str, str]) -> dict[str, str]:
+    merged = dict(current)
+    for key in ("grade_sbr", "sbr_tubule_score", "sbr_nuclear_score", "sbr_mitotic_score", "er_percent", "pr_percent", "pdl1_cps_value"):
+        if incoming.get(key, "null") != "null" and (merged.get(key, "null") == "null" or int(incoming[key]) > int(merged[key])):
+            merged[key] = incoming[key]
+    if incoming.get("histology_type", "null") != "null":
+        if merged["histology_type"] == "null":
+            merged["histology_type"] = incoming["histology_type"]
+        elif merged["histology_type"] != incoming["histology_type"]:
+            merged["histology_type"] = "MIXED_NST_LOBULAR" if {merged["histology_type"], incoming["histology_type"]} == {"NST", "LOBULAR"} else "OTHER_SPECIFIED"
+    for key in ("er_intensity", "pr_intensity"):
+        if incoming.get(key, "null") != "null" and debug_intensity_rank(incoming[key]) > debug_intensity_rank(merged[key]):
+            merged[key] = incoming[key]
+    for key in ("er_status", "pr_status", "hormone_receptor_status_project", "her2_status", "pdl1_cps_status_project"):
+        if incoming.get(key) == "POSITIVE" or (merged.get(key, "null") == "null" and incoming.get(key, "null") != "null"):
+            merged[key] = incoming[key]
+    if incoming.get("her2_ish_result") == "AMPLIFIED" or (merged["her2_ish_result"] == "null" and incoming.get("her2_ish_result", "null") != "null"):
+        merged["her2_ish_result"] = incoming["her2_ish_result"]
+    if incoming.get("her2_ihc_score", "null") != "null" and debug_her2_score_rank(incoming["her2_ihc_score"]) > debug_her2_score_rank(merged["her2_ihc_score"]):
+        merged["her2_ihc_score"] = incoming["her2_ihc_score"]
+    qualification_rank = {"null": -1, "HER2_NULL": 0, "ULTRALOW": 1, "LOW": 2, "POSITIVE": 3}
+    if qualification_rank.get(incoming.get("her2_qualification_project", "null"), -1) > qualification_rank.get(merged["her2_qualification_project"], -1):
+        merged["her2_qualification_project"] = incoming["her2_qualification_project"]
+    return merged
+
+
+def debug_is_centered_date_window(date_str: str, pivot_date: Optional[str], days: int = 90) -> bool:
+    if not pivot_date or not date_str or date_str == "null":
+        return True
+    try:
+        date_value = datetime.strptime(date_str, "%Y%m%d")
+        pivot_value = datetime.strptime(pivot_date, "%Y%m%d")
+    except Exception:
+        return True
+    return abs((date_value - pivot_value).days) <= days
+
+
+def debug_consolidate_breast_anapath_variables(selected: list[tuple[Path, dict, Path]], diagnosis_date: Optional[str]) -> dict[str, str]:
+    consolidated = debug_empty_breast_anapath_values()
+    sources: list[str] = []
+    docs: list[tuple[str, str, Path, str]] = []
+    for metadata_path, metadata, pdf_path in selected:
+        date = extract_date_from_filename(pdf_path.name) or metadata_to_document_date(metadata)
+        if not debug_is_centered_date_window(date, diagnosis_date, days=90):
+            continue
+        text = extract_pdf_text(pdf_path)
+        if not BREAST_CONTEXT_PATTERN.search(text):
+            continue
+        docs.append((detect_document_kind(metadata, metadata_path, pdf_path), date, pdf_path, text))
+    pathology_docs = [doc for doc in docs if doc[0] == "pathology"]
+    fallback_docs = [doc for doc in docs if doc[0] in {"consultation", "rcp", "radiology"}]
+    found_keys: set[str] = set()
+    for group in (pathology_docs, fallback_docs):
+        prior_found_keys = set(found_keys)
+        for document_kind, date, pdf_path, text in group:
+            values = debug_extract_breast_anapath_values(text)
+            filtered = {key: value if key not in prior_found_keys else "null" for key, value in values.items()}
+            if any(value != "null" for value in filtered.values()):
+                consolidated = debug_merge_breast_anapath_values(consolidated, filtered)
+                sources.append(f"{pdf_path.name}:{date}:{document_kind}")
+        found_keys.update(key for key, value in consolidated.items() if key != "breast_anapath_sources" and value != "null")
+    if consolidated["er_percent"] != "null":
+        consolidated["er_status"] = "POSITIVE" if int(consolidated["er_percent"]) >= 10 else "NEGATIVE"
+    if consolidated["pr_percent"] != "null":
+        consolidated["pr_status"] = "POSITIVE" if int(consolidated["pr_percent"]) >= 10 else "NEGATIVE"
+    if consolidated["er_status"] == "POSITIVE" or consolidated["pr_status"] == "POSITIVE":
+        consolidated["hormone_receptor_status_project"] = "POSITIVE"
+    elif consolidated["er_status"] == "NEGATIVE" and consolidated["pr_status"] == "NEGATIVE":
+        consolidated["hormone_receptor_status_project"] = "NEGATIVE"
+    if consolidated["her2_status"] == "POSITIVE":
+        consolidated["her2_qualification_project"] = "POSITIVE"
+    elif consolidated["her2_ihc_score"] == "2+" and consolidated["her2_ish_result"] == "NOT_AMPLIFIED":
+        consolidated["her2_status"] = "NEGATIVE"
+        consolidated["her2_qualification_project"] = "LOW"
+    elif consolidated["her2_ihc_score"] == "1+":
+        consolidated["her2_status"] = "NEGATIVE"
+        consolidated["her2_qualification_project"] = "LOW"
+    elif consolidated["her2_ihc_score"] == "0" and consolidated["her2_qualification_project"] == "null":
+        consolidated["her2_status"] = "NEGATIVE"
+        consolidated["her2_qualification_project"] = "HER2_NULL"
+    consolidated["breast_anapath_sources"] = ";".join(dict.fromkeys(sources)) if sources else "null"
+    return consolidated
+
+
 # =============================================================================
 # DOCUMENT PROCESSING
 # =============================================================================
@@ -2145,6 +2424,31 @@ def main() -> int:
         f"INFO | match={chosen['pattern']} | raw='{chosen['raw']}' | "
         f"T={chosen['t']} N={chosen['n']} M={chosen['m']} | stage={chosen['stage']}"
     )
+    breast_values = debug_consolidate_breast_anapath_variables(selected, diagnosis_date)
+    if breast_values.get("breast_anapath_sources", "null") != "null":
+        visible_keys = [
+            "histology_type",
+            "grade_sbr",
+            "sbr_tubule_score",
+            "sbr_nuclear_score",
+            "sbr_mitotic_score",
+            "er_percent",
+            "er_intensity",
+            "er_status",
+            "pr_percent",
+            "pr_intensity",
+            "pr_status",
+            "hormone_receptor_status_project",
+            "her2_ihc_score",
+            "her2_ish_result",
+            "her2_status",
+            "her2_qualification_project",
+            "pdl1_cps_value",
+            "pdl1_cps_status_project",
+        ]
+        formatted_values = " | ".join(f"{key}={breast_values.get(key, 'null')}" for key in visible_keys)
+        print(f"INFO | BREAST_ANAPATH | {formatted_values}")
+        print(f"INFO | BREAST_ANAPATH_SOURCES | {breast_values.get('breast_anapath_sources', 'null')}")
 
     return 0
 
