@@ -56,9 +56,9 @@ with DAG(
     tags=["production", "survie", "stade", "tnm", "llm", "datamart"],
 ) as dag:
 
-    DATE_DEBUT_OBS = "{{ dag_run.conf.get('date_debut_obs', '2020') }}"
+    DATE_DEBUT_OBS = "{{ dag_run.conf.get('date_debut_obs', '2020-01-01') }}"
     # Exclut les diagnostics d'octobre à décembre (données de suivi incomplètes l'année suivante).
-    DATE_FIN_OBS = "{{ dag_run.conf.get('date_fin_obs', (macros.datetime.now().year - 1) ~ '-09-30') }}"
+    DATE_FIN_OBS = "{{ dag_run.conf.get('date_fin_obs', '2020-12-31') }}"
 
     # ------------------------------------------------------------------
     # 1. Extraction des IPP sans stade depuis v_statut_vital

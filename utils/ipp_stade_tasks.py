@@ -91,7 +91,12 @@ def _extract_ipp_df(
     only_missing_stage: bool,
 ) -> pd.DataFrame:
     hook = PostgresHook(postgres_conn_id=conn_id)
-    year = str(date_debut_obs)[:4]
+    start_date = str(date_debut_obs)
+    if len(start_date) == 4 and start_date.isdigit():
+        start_date = f"{start_date}-01-01"
+    end_date = str(date_fin_obs)
+    if len(end_date) == 4 and end_date.isdigit():
+        end_date = f"{end_date}-12-31"
     stage_filter = ""
     if only_missing_stage:
         stage_filter = """
@@ -121,8 +126,8 @@ def _extract_ipp_df(
             )
         )
         AND COALESCE(date_diag_tkc, date_diag_dcc) IS NOT NULL
-        AND EXTRACT(YEAR FROM COALESCE(date_diag_tkc, date_diag_dcc))::int >= {int(year)}
-        AND COALESCE(date_diag_tkc, date_diag_dcc)::date <= DATE '{str(date_fin_obs)}'
+        AND COALESCE(date_diag_tkc, date_diag_dcc)::date >= DATE '{start_date}'
+        AND COALESCE(date_diag_tkc, date_diag_dcc)::date <= DATE '{end_date}'
         AND ipp_ocr IS NOT NULL
         AND ipp_ocr <> ''
         {stage_filter}
@@ -144,7 +149,7 @@ def _extract_ipp_df(
 def extract_ipp_task(date_debut_obs: str, date_fin_obs: str, conn_id: str = "postgres_test", **kwargs) -> None:
     """
     Extrait tous les IPP distincts depuis datamart_oeci_survie.v_statut_vital
-    dont date_diag_tkc (ou date_diag_dcc) >= 2020-01-01.
+    dont date_diag_tkc (ou date_diag_dcc) est dans la fenetre demandee.
 
     Pousse le résultat en XCom : liste JSON des IPP (strings).
     """
@@ -171,7 +176,7 @@ def extract_ipp_without_stage_task(
 ) -> None:
     """
     Extrait uniquement les IPP dont la colonne stade est absente dans
-    datamart_oeci_survie.v_statut_vital.
+    datamart_oeci_survie.v_statut_vital, dans la fenetre demandee.
     """
     df = _extract_ipp_df(
         date_debut_obs=date_debut_obs,
@@ -586,6 +591,106 @@ def _parse_text_array(raw: object) -> Optional[list[str]]:
     return cleaned or None
 
 
+INTEGER_TYPE_RANGES = {
+    "smallint": (-32768, 32767),
+    "integer": (-2147483648, 2147483647),
+    "bigint": (-9223372036854775808, 9223372036854775807),
+}
+
+INTEGER_DF_COLUMNS = {
+    "documents_seen": "documents_seen_int",
+    "documents_with_stage": "documents_with_stage_int",
+    "grade_sbr": "grade_sbr_int",
+    "sbr_tubule_score": "sbr_tubule_score_int",
+    "sbr_nuclear_score": "sbr_nuclear_score_int",
+    "sbr_mitotic_score": "sbr_mitotic_score_int",
+    "er_percent": "er_percent_int",
+    "pr_percent": "pr_percent_int",
+    "pdl1_cps_value": "pdl1_cps_value_int",
+}
+
+
+def _quote_ident(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def _fetch_table_column_types(cur, schema: str, table: str) -> dict[str, str]:
+    cur.execute(
+        """
+        SELECT column_name, data_type
+        FROM information_schema.columns
+        WHERE table_schema = %s
+          AND table_name = %s
+        """,
+        (schema, table),
+    )
+    return {column_name: data_type for column_name, data_type in cur.fetchall()}
+
+
+def _ensure_ipp_text_column(cur, schema: str, table: str) -> dict[str, str]:
+    column_types = _fetch_table_column_types(cur, schema, table)
+    ipp_type = column_types.get("ipp")
+    if ipp_type in INTEGER_TYPE_RANGES:
+        full_table = f"{_quote_ident(schema)}.{_quote_ident(table)}"
+        logger.warning(
+            "Conversion de %s.ipp de %s vers text pour éviter les débordements d'identifiants IPP.",
+            full_table,
+            ipp_type,
+        )
+        cur.execute(
+            f"""
+            ALTER TABLE {full_table}
+            ALTER COLUMN ipp TYPE text USING ipp::text
+            """
+        )
+        column_types["ipp"] = "text"
+    return column_types
+
+
+def _nullify_integer_range_overflows(
+    df: pd.DataFrame,
+    column_types: dict[str, str],
+) -> None:
+    for db_column, df_column in INTEGER_DF_COLUMNS.items():
+        data_type = column_types.get(db_column)
+        if data_type not in INTEGER_TYPE_RANGES or df_column not in df.columns:
+            continue
+
+        lower_bound, upper_bound = INTEGER_TYPE_RANGES[data_type]
+        values = df[df_column]
+        invalid_mask = values.notna() & (
+            (values < lower_bound) | (values > upper_bound)
+        )
+        if not invalid_mask.any():
+            continue
+
+        sample_columns = ["ipp", df_column]
+        if db_column in df.columns:
+            sample_columns.insert(1, db_column)
+        samples = (
+            df.loc[invalid_mask, sample_columns]
+            .head(20)
+            .rename(
+                columns={
+                    db_column: "raw_value",
+                    df_column: "parsed_value",
+                }
+            )
+            .to_dict(orient="records")
+        )
+        logger.warning(
+            "Valeurs hors plage pour %s (%s) dans ipp_stade: %d valeur(s) remplacee(s) par NULL. "
+            "Plage attendue: %s..%s. Exemples ipp/raw_value/parsed_value: %s",
+            db_column,
+            data_type,
+            int(invalid_mask.sum()),
+            lower_bound,
+            upper_bound,
+            samples,
+        )
+        df.loc[invalid_mask, df_column] = None
+
+
 def _series_or_default(df: pd.DataFrame, column: str, default: object = None) -> pd.Series:
     if column in df.columns:
         return df[column]
@@ -828,6 +933,9 @@ def load_ipp_stade_task(
             df = df.drop_duplicates(subset=["ipp"], keep="last")
 
         with pg_conn.cursor() as cur:
+            column_types = _ensure_ipp_text_column(cur, schema, table)
+            _nullify_integer_range_overflows(df, column_types)
+
             last_update = datetime.utcnow()
             rows = []
             for _, row in df.iterrows():
