@@ -2787,22 +2787,37 @@ def consolidate_breast_anapath_variables(rows: list[DocumentResult], diagnosis_d
         row for row in rows
         if is_centered_date_window(row.document_date, diagnosis_date, days=90)
     ]
-    if not any(BREAST_CONTEXT_PATTERN.search(extract_pdf_text(Path(row.pdf_file))) for row in eligible if Path(row.pdf_file).exists()):
+    readable_breast_rows: list[tuple[DocumentResult, str]] = []
+    for row in eligible:
+        pdf_path = Path(row.pdf_file)
+        if not pdf_path.exists():
+            continue
+        try:
+            text = extract_pdf_text(pdf_path)
+        except Exception as exc:
+            LOGGER.warning(
+                "Breast anapath skipped unreadable PDF | ipp=%s | file=%s | error=%s",
+                row.ipp,
+                pdf_path,
+                exc,
+            )
+            continue
+        if BREAST_CONTEXT_PATTERN.search(text):
+            readable_breast_rows.append((row, text))
+
+    if not readable_breast_rows:
         empty["breast_anapath_sources"] = NULL_VALUE
         return empty
 
-    pathology_rows = [row for row in eligible if row.document_kind == "pathology"]
-    fallback_rows = [row for row in eligible if row.document_kind in {"consultation", "rcp", "radiology"}]
+    pathology_rows = [(row, text) for row, text in readable_breast_rows if row.document_kind == "pathology"]
+    fallback_rows = [(row, text) for row, text in readable_breast_rows if row.document_kind in {"consultation", "rcp", "radiology"}]
     consolidated = dict(empty)
     found_keys: set[str] = set()
     for group in (pathology_rows, fallback_rows):
         prior_found_keys = set(found_keys)
         group_values: list[tuple[DocumentResult, dict[str, str]]] = []
-        for row in group:
-            pdf_path = Path(row.pdf_file)
-            if not pdf_path.exists():
-                continue
-            values = extract_breast_anapath_values(extract_pdf_text(pdf_path))
+        for row, text in group:
+            values = extract_breast_anapath_values(text)
             if any(value != NULL_VALUE for value in values.values()):
                 group_values.append((row, values))
         if not group_values:

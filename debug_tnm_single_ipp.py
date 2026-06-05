@@ -1515,7 +1515,15 @@ def debug_consolidate_breast_anapath_variables(selected: list[tuple[Path, dict, 
         date = extract_date_from_filename(pdf_path.name) or metadata_to_document_date(metadata)
         if not debug_is_centered_date_window(date, diagnosis_date, days=90):
             continue
-        text = extract_pdf_text(pdf_path)
+        try:
+            text = extract_pdf_text(pdf_path)
+        except Exception as exc:
+            LOGGER.warning(
+                "Breast anapath debug skipped unreadable PDF | file=%s | error=%s",
+                pdf_path,
+                exc,
+            )
+            continue
         if not BREAST_CONTEXT_PATTERN.search(text):
             continue
         docs.append((detect_document_kind(metadata, metadata_path, pdf_path), date, pdf_path, text))
