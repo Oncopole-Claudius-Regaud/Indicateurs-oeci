@@ -691,6 +691,48 @@ def _nullify_integer_range_overflows(
         df.loc[invalid_mask, df_column] = None
 
 
+def _log_insert_failure_diagnostics(
+    cur,
+    insert_sql: str,
+    rows: list[tuple],
+    export_columns: list[str],
+) -> None:
+    from psycopg2.extras import execute_values
+
+    integer_columns = set(INTEGER_DF_COLUMNS.keys())
+
+    for row_number, row_values in enumerate(rows, start=1):
+        cur.execute("SAVEPOINT ipp_stade_row_diag")
+        try:
+            execute_values(cur, insert_sql, [row_values], page_size=1)
+        except Exception as row_error:
+            cur.execute("ROLLBACK TO SAVEPOINT ipp_stade_row_diag")
+            cur.execute("RELEASE SAVEPOINT ipp_stade_row_diag")
+
+            row_dict = dict(zip(export_columns, row_values))
+            integer_values = {
+                column: row_dict.get(column)
+                for column in export_columns
+                if column in integer_columns
+            }
+            logger.error(
+                "Echec insertion ipp_stade sur la ligne %d: ipp=%s, erreur=%s, colonnes_int=%s, ligne_complete=%s",
+                row_number,
+                row_dict.get("ipp"),
+                row_error,
+                integer_values,
+                row_dict,
+            )
+            return
+        else:
+            cur.execute("ROLLBACK TO SAVEPOINT ipp_stade_row_diag")
+            cur.execute("RELEASE SAVEPOINT ipp_stade_row_diag")
+
+    logger.error(
+        "Echec insertion ipp_stade en bulk, mais aucune ligne isolee n'a reproduit l'erreur."
+    )
+
+
 def _series_or_default(df: pd.DataFrame, column: str, default: object = None) -> pd.Series:
     if column in df.columns:
         return df[column]
@@ -1097,7 +1139,21 @@ def load_ipp_stade_task(
                             pdl1_cps_status_project = EXCLUDED.pdl1_cps_status_project,
                             breast_anapath_sources = EXCLUDED.breast_anapath_sources
                 """
-                execute_values(cur, insert_sql, rows, page_size=500)
+                cur.execute("SAVEPOINT ipp_stade_bulk_insert")
+                try:
+                    execute_values(cur, insert_sql, rows, page_size=500)
+                except Exception:
+                    cur.execute("ROLLBACK TO SAVEPOINT ipp_stade_bulk_insert")
+                    cur.execute("RELEASE SAVEPOINT ipp_stade_bulk_insert")
+                    _log_insert_failure_diagnostics(
+                        cur,
+                        insert_sql,
+                        rows,
+                        export_columns,
+                    )
+                    raise
+                else:
+                    cur.execute("RELEASE SAVEPOINT ipp_stade_bulk_insert")
                 logger.info("INSERT %d lignes dans %s", len(rows), full_table)
             else:
                 logger.warning("Aucune ligne à insérer.")
