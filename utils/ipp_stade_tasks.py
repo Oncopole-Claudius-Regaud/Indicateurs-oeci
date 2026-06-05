@@ -535,6 +535,19 @@ def _normalize_text(raw: object) -> Optional[str]:
     return value
 
 
+def _to_db_value(raw: object) -> object:
+    if raw is None:
+        return None
+    if isinstance(raw, list):
+        return raw
+    try:
+        if pd.isna(raw):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return raw
+
+
 def _parse_date_value(raw: object) -> Optional[str]:
     value = _normalize_text(raw)
     if value is None:
@@ -981,7 +994,7 @@ def load_ipp_stade_task(
             last_update = datetime.utcnow()
             rows = []
             for _, row in df.iterrows():
-                rows.append((
+                record = (
                     row["ipp"],
                     _normalize_text(row.get("organe")),
                     _normalize_text(row.get("code_cim")),
@@ -1028,7 +1041,8 @@ def load_ipp_stade_task(
                     row.get("pdl1_cps_value_int"),
                     _normalize_text(row.get("pdl1_cps_status_project")),
                     _normalize_text(row.get("breast_anapath_sources")),
-                ))
+                )
+                rows.append(tuple(_to_db_value(value) for value in record))
 
             if rows:
                 enriched_csv_path = str(
