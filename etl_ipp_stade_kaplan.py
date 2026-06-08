@@ -57,8 +57,9 @@ with DAG(
 ) as dag:
 
     DATE_DEBUT_OBS = "{{ dag_run.conf.get('date_debut_obs', '2020-01-01') }}"
-    # Exclut les diagnostics d'octobre à décembre (données de suivi incomplètes l'année suivante).
+    # Fenetre diagnostic de la cohorte. Le suivi est borne separement.
     DATE_FIN_OBS = "{{ dag_run.conf.get('date_fin_obs', '2020-12-31') }}"
+    DATE_FIN_SUIVI = "{{ dag_run.conf.get('date_fin_suivi', '2030-12-31') }}"
 
     # ------------------------------------------------------------------
     # 1. Extraction des IPP sans stade depuis v_statut_vital
@@ -188,6 +189,7 @@ with DAG(
             op_kwargs={
                 "date_debut_obs": DATE_DEBUT_OBS,
                 "date_fin_obs": DATE_FIN_OBS,
+                "date_fin_suivi": DATE_FIN_SUIVI,
             },
         )
 
@@ -199,6 +201,7 @@ with DAG(
                 "organe": organe,
                 "date_debut_obs": DATE_DEBUT_OBS,
                 "date_fin_obs": DATE_FIN_OBS,
+                "date_fin_suivi": DATE_FIN_SUIVI,
                 "conn_id": POSTGRES_CONN_ID,
             },
         )
@@ -211,6 +214,7 @@ with DAG(
                 "organe": organe,
                 "date_debut_obs": DATE_DEBUT_OBS,
                 "date_fin_obs": DATE_FIN_OBS,
+                "date_fin_suivi": DATE_FIN_SUIVI,
                 "conn_id": POSTGRES_CONN_ID,
             },
         )

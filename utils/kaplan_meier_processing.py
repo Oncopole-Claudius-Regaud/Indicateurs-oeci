@@ -120,6 +120,7 @@ def _compute_km_outputs(df_patient, start_obs, end_obs, stade=None):
             kpi = {
                 "time_point": t,
                 "survival_rate": None,
+                "ic_range": None,
                 "ic_low_pct": None,
                 "ic_high_pct": None,
             }
@@ -127,16 +128,20 @@ def _compute_km_outputs(df_patient, start_obs, end_obs, stade=None):
             try:
                 surv = float(kmf.survival_function_at_times(t).iloc[0]) * 100
                 ci = kmf.confidence_interval_survival_function_.loc[:t].iloc[-1] * 100
+                ic_low_pct = round(float(ci.iloc[0]), 2)
+                ic_high_pct = round(float(ci.iloc[1]), 2)
                 kpi = {
                     "time_point": t,
                     "survival_rate": round(surv, 2),
-                    "ic_low_pct": round(float(ci.iloc[0]), 2),
-                    "ic_high_pct": round(float(ci.iloc[1]), 2),
+                    "ic_range": f"{ic_low_pct} - {ic_high_pct}",
+                    "ic_low_pct": ic_low_pct,
+                    "ic_high_pct": ic_high_pct,
                 }
             except Exception:
                 kpi = {
                     "time_point": t,
                     "survival_rate": None,
+                    "ic_range": None,
                     "ic_low_pct": None,
                     "ic_high_pct": None,
                 }
@@ -232,7 +237,10 @@ def calculate_kaplan_meier_task(ti, **kwargs):
     df = pd.read_json(StringIO(df_json))
 
     start_obs = pd.to_datetime(kwargs.get("date_debut_obs"), errors="coerce")
-    end_obs = pd.to_datetime(kwargs.get("date_fin_obs"), errors="coerce")
+    end_obs = pd.to_datetime(
+        kwargs.get("date_fin_suivi", kwargs.get("date_fin_obs")),
+        errors="coerce",
+    )
 
     df["date_diag_tkc"] = pd.to_datetime(df.get("date_diag_tkc"), errors="coerce")
     df["date_diag_dcc"] = pd.to_datetime(df.get("date_diag_dcc"), errors="coerce", dayfirst=True)
@@ -371,7 +379,7 @@ def load_to_db_task(ti, table_name, conn_id=None, **kwargs):
         raise ValueError("Paramètre 'organe' manquant dans op_kwargs (DAG).")
 
     date_debut_obs = kwargs.get("date_debut_obs")
-    date_fin_obs = kwargs.get("date_fin_obs")
+    date_fin_obs = kwargs.get("date_fin_suivi", kwargs.get("date_fin_obs"))
 
     date_start_obs_year = str(date_debut_obs)[:4] if date_debut_obs is not None else None
     date_end_obs_year = str(date_fin_obs)[:4] if date_fin_obs is not None else None
