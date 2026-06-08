@@ -77,17 +77,38 @@ def _compute_final_patient_counts(df_patient, start_obs, end_obs):
 
     is_deceased = _death_in_observation_window_mask(df_patient, start_obs, end_obs)
 
-    if pd.notna(end_obs):
-        is_alive = (~is_deceased) & (df_patient["date_derniere_nouvelle"] > end_obs)
-        is_pdv = (~is_deceased) & (~is_alive)
-    else:
-        is_pdv = (~is_deceased) & df_patient["is_pdv_status"]
-        is_alive = (~is_deceased) & (~is_pdv)
+    is_pdv = (~is_deceased) & df_patient["is_pdv_status"]
+    is_alive = (~is_deceased) & (~is_pdv)
 
     return {
         "nb_decedes_fin_courbe": int(is_deceased.sum()),
         "nb_vivants_fin_courbe": int(is_alive.sum()),
         "nb_pdv_fin_courbe": int(is_pdv.sum()),
+    }
+
+
+def _compute_patient_counts_at_timepoint(df_patient, years):
+    if df_patient.empty:
+        return {
+            "nb_decedes_fin_courbe": 0,
+            "nb_vivants_fin_courbe": 0,
+            "nb_pdv_fin_courbe": 0,
+        }
+
+    died_before_timepoint = (
+        (df_patient["event_observed"] == 1) & (df_patient["time_years"] <= years)
+    ).fillna(False)
+    alive_at_timepoint = (
+        (~died_before_timepoint) & (df_patient["time_years"] >= years)
+    ).fillna(False)
+    lost_before_timepoint = (
+        (~died_before_timepoint) & (~alive_at_timepoint)
+    ).fillna(False)
+
+    return {
+        "nb_decedes_fin_courbe": int(died_before_timepoint.sum()),
+        "nb_vivants_fin_courbe": int(alive_at_timepoint.sum()),
+        "nb_pdv_fin_courbe": int(lost_before_timepoint.sum()),
     }
 
 
@@ -116,6 +137,7 @@ def _compute_km_outputs(df_patient, start_obs, end_obs, stade=None):
     key_indicators = []
     max_followup_years = float(df_patient["time_years"].max())
     for t in [1, 5, 10]:
+        timepoint_patient_counts = _compute_patient_counts_at_timepoint(df_patient, t)
         if t > max_followup_years:
             kpi = {
                 "time_point": t,
@@ -146,7 +168,7 @@ def _compute_km_outputs(df_patient, start_obs, end_obs, stade=None):
                     "ic_high_pct": None,
                 }
 
-        kpi.update(final_patient_counts)
+        kpi.update(timepoint_patient_counts)
         if stade is not None:
             kpi["stade"] = stade
         key_indicators.append(kpi)
