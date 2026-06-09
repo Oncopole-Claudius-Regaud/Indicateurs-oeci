@@ -56,7 +56,7 @@ with DAG(
     tags=["production", "survie", "stade", "tnm", "llm", "datamart"],
 ) as dag:
 
-    DATE_DEBUT_OBS = "{{ dag_run.conf.get('date_debut_obs', '2020-01-01') }}"
+    DATE_DEBUT_OBS = "{{ dag_run.conf.get('date_debut_obs', '2020-01-02') }}"
     # Fenetre diagnostic de la cohorte. Le suivi est borne separement.
     DATE_FIN_OBS = "{{ dag_run.conf.get('date_fin_obs', '2020-12-31') }}"
     DATE_FIN_SUIVI = "{{ dag_run.conf.get('date_fin_suivi', '2030-12-31') }}"

@@ -89,6 +89,7 @@ def _extract_ipp_df(
     date_fin_obs: str,
     conn_id: str,
     only_missing_stage: bool,
+    first_visit_max_date: str = "2021-06-30",
 ) -> pd.DataFrame:
     hook = PostgresHook(postgres_conn_id=conn_id)
     start_date = str(date_debut_obs)
@@ -100,42 +101,51 @@ def _extract_ipp_df(
     stage_filter = ""
     if only_missing_stage:
         stage_filter = """
-        AND NULLIF(BTRIM(COALESCE(stage::text, '')), '') IS NULL
+        AND NULLIF(BTRIM(COALESCE(v.stage::text, '')), '') IS NULL
         """
 
     query = f"""
-    SELECT DISTINCT ON (ipp_ocr)
-        ipp_ocr,
-        organe,
-        code_cim,
-        date_diag_tkc::date AS date_diag_tkc,
-        date_diag_dcc::date AS date_diag_dcc
-    FROM datamart_oeci_survie.v_statut_vital
+    SELECT DISTINCT ON (v.ipp_ocr)
+        v.ipp_ocr,
+        v.organe,
+        v.code_cim,
+        v.date_diag_tkc::date AS date_diag_tkc,
+        v.date_diag_dcc::date AS date_diag_dcc
+    FROM datamart_oeci_survie.v_statut_vital v
+    JOIN LATERAL (
+        SELECT MIN(vis.visit_start_date::date) AS first_visit_start_date
+        FROM osiris.visit vis
+        WHERE
+            vis.ipp_ocr::text = v.ipp_ocr::text
+            AND vis.visit_start_date IS NOT NULL
+            AND vis.visit_start_date::date >= COALESCE(v.date_diag_tkc, v.date_diag_dcc)::date
+            AND vis.visit_start_date::date <= DATE '{first_visit_max_date}'
+    ) fv ON fv.first_visit_start_date IS NOT NULL
     WHERE
-        organe IS NOT NULL
-        AND code_cim IS NOT NULL
+        v.organe IS NOT NULL
+        AND v.code_cim IS NOT NULL
         AND (
-            UPPER(BTRIM(organe::text)) = 'SEIN'
+            UPPER(BTRIM(v.organe::text)) = 'SEIN'
             OR (
-                UPPER(BTRIM(organe::text)) = 'UROLOGIE'
-                AND LEFT(UPPER(BTRIM(code_cim::text)), 3) = 'C61'
+                UPPER(BTRIM(v.organe::text)) = 'UROLOGIE'
+                AND LEFT(UPPER(BTRIM(v.code_cim::text)), 3) = 'C61'
             )
             OR (
-                UPPER(BTRIM(organe::text)) = 'PEAU'
-                AND LEFT(UPPER(BTRIM(code_cim::text)), 3) = 'C43'
+                UPPER(BTRIM(v.organe::text)) = 'PEAU'
+                AND LEFT(UPPER(BTRIM(v.code_cim::text)), 3) = 'C43'
             )
         )
-        AND COALESCE(date_diag_tkc, date_diag_dcc) IS NOT NULL
-        AND COALESCE(date_diag_tkc, date_diag_dcc)::date >= DATE '{start_date}'
-        AND COALESCE(date_diag_tkc, date_diag_dcc)::date <= DATE '{end_date}'
-        AND ipp_ocr IS NOT NULL
-        AND ipp_ocr <> ''
+        AND COALESCE(v.date_diag_tkc, v.date_diag_dcc) IS NOT NULL
+        AND COALESCE(v.date_diag_tkc, v.date_diag_dcc)::date >= DATE '{start_date}'
+        AND COALESCE(v.date_diag_tkc, v.date_diag_dcc)::date <= DATE '{end_date}'
+        AND v.ipp_ocr IS NOT NULL
+        AND v.ipp_ocr <> ''
         {stage_filter}
     ORDER BY
-        ipp_ocr,
-        COALESCE(date_diag_tkc, date_diag_dcc) DESC NULLS LAST,
-        date_diag_tkc DESC NULLS LAST,
-        date_diag_dcc DESC NULLS LAST
+        v.ipp_ocr,
+        COALESCE(v.date_diag_tkc, v.date_diag_dcc) DESC NULLS LAST,
+        v.date_diag_tkc DESC NULLS LAST,
+        v.date_diag_dcc DESC NULLS LAST
     ;
     """
 
