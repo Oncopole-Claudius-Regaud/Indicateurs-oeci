@@ -1233,7 +1233,6 @@ def refresh_view_task(conn_id: str = "postgres_test", **kwargs) -> None:
     finally:
         conn.close()
 
-
 # ---------------------------------------------------------------------------
 # 7. Wrapper extract_and_clean pour le pipeline KM (remplace l'appel direct)
 # ---------------------------------------------------------------------------

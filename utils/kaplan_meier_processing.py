@@ -112,6 +112,14 @@ def _compute_patient_counts_at_timepoint(df_patient, years):
     }
 
 
+def _null_patient_counts():
+    return {
+        "nb_decedes_fin_courbe": None,
+        "nb_vivants_fin_courbe": None,
+        "nb_pdv_fin_courbe": None,
+    }
+
+
 def _compute_km_outputs(df_patient, start_obs, end_obs, stade=None):
     if df_patient.empty:
         return [], [], {
@@ -137,7 +145,6 @@ def _compute_km_outputs(df_patient, start_obs, end_obs, stade=None):
     key_indicators = []
     max_followup_years = float(df_patient["time_years"].max())
     for t in [1, 5, 10]:
-        timepoint_patient_counts = _compute_patient_counts_at_timepoint(df_patient, t)
         if t > max_followup_years:
             kpi = {
                 "time_point": t,
@@ -146,12 +153,14 @@ def _compute_km_outputs(df_patient, start_obs, end_obs, stade=None):
                 "ic_low_pct": None,
                 "ic_high_pct": None,
             }
+            timepoint_patient_counts = _null_patient_counts()
         else:
             try:
                 surv = float(kmf.survival_function_at_times(t).iloc[0]) * 100
                 ci = kmf.confidence_interval_survival_function_.loc[:t].iloc[-1] * 100
                 ic_low_pct = round(float(ci.iloc[0]), 2)
                 ic_high_pct = round(float(ci.iloc[1]), 2)
+                timepoint_patient_counts = _compute_patient_counts_at_timepoint(df_patient, t)
                 kpi = {
                     "time_point": t,
                     "survival_rate": round(surv, 2),
@@ -167,6 +176,7 @@ def _compute_km_outputs(df_patient, start_obs, end_obs, stade=None):
                     "ic_low_pct": None,
                     "ic_high_pct": None,
                 }
+                timepoint_patient_counts = _null_patient_counts()
 
         kpi.update(timepoint_patient_counts)
         if stade is not None:

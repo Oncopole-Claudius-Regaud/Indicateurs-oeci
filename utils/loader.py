@@ -108,7 +108,6 @@ def extract_treatments_to_file(pg_conn):
             num_doss,
             jour,
             dat_admini,
-            cod_categ_proto,
             cod_typ_proto,
             num_pdt,
             nom_pdt,
@@ -118,7 +117,7 @@ def extract_treatments_to_file(pg_conn):
             dose_tot,
             nom_proto,
             nom_moda,
-            ce_etat_chimio
+            id
         FROM osiris.chimiotherapie
     """)
 
@@ -152,9 +151,9 @@ def load_treatments_from_file(pg_conn):
         pg_cur.copy_expert("""
             COPY oeci.chimiotherapie (
                 num_doss,  jour, dat_admini,
-                cod_categ_proto, cod_typ_proto, num_pdt, nom_pdt,
+                cod_typ_proto, num_pdt, nom_pdt,
                 cod_voie, uf_real, lib_uf_real, dose_tot,
-                nom_proto, nom_moda, ce_etat_chimio
+                nom_proto, nom_moda, id
             )
             FROM STDIN WITH (FORMAT csv, DELIMITER '|', NULL '', HEADER false)
         """, f)
