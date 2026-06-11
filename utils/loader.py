@@ -116,8 +116,7 @@ def extract_treatments_to_file(pg_conn):
             lib_uf_real,
             dose_tot,
             nom_proto,
-            nom_moda,
-            id
+            nom_moda
         FROM osiris.chimiotherapie
     """)
 
@@ -153,7 +152,7 @@ def load_treatments_from_file(pg_conn):
                 num_doss,  jour, dat_admini,
                 cod_typ_proto, num_pdt, nom_pdt,
                 cod_voie, uf_real, lib_uf_real, dose_tot,
-                nom_proto, nom_moda, id
+                nom_proto, nom_moda
             )
             FROM STDIN WITH (FORMAT csv, DELIMITER '|', NULL '', HEADER false)
         """, f)
