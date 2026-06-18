@@ -219,8 +219,13 @@ def load_collecteur_acte_icr_from_file(pg_conn, pg_cur):
     cols_csv = ", ".join(cols)
     cutoff_date = datetime(2023, 1, 1)
 
+    pg_cur.execute("SET lock_timeout = '10s';")
+    pg_cur.execute("SET statement_timeout = '0';")
+
+    logging.info("Truncate de oeci.collecteur_acte_icr...")
     pg_cur.execute("TRUNCATE TABLE oeci.collecteur_acte_icr CASCADE;")
     pg_conn.commit()
+    logging.info("Truncate de oeci.collecteur_acte_icr termine.")
 
     insert_sql = f"INSERT INTO oeci.collecteur_acte_icr ({cols_csv}) VALUES %s"
     buffer: List[Tuple] = []
@@ -230,6 +235,14 @@ def load_collecteur_acte_icr_from_file(pg_conn, pg_cur):
 
     for row in _stream_rows(basename):
         read_total += 1
+        if read_total % 100_000 == 0:
+            logging.info(
+                "[ETL] collecteur_acte_icr: %s lignes lues, %s inserees, %s filtrees...",
+                f"{read_total:,}",
+                f"{inserted_total:,}",
+                f"{filtered_total:,}",
+            )
+
         cai_date_real = _to_timestamp_or_none(_row_get(row, "cai_date_real"))
 
         if cai_date_real is None or cai_date_real <= cutoff_date:
@@ -246,16 +259,17 @@ def load_collecteur_acte_icr_from_file(pg_conn, pg_cur):
         ))
 
         if len(buffer) >= BATCH_SIZE:
-            execute_values(pg_cur, insert_sql, buffer)
+            execute_values(pg_cur, insert_sql, buffer, page_size=1000)
             pg_conn.commit()
             inserted_total += len(buffer)
             logging.info(f"[ETL] collecteur_acte_icr: {inserted_total:,} lignes insérées...")
             buffer.clear()
 
     if buffer:
-        execute_values(pg_cur, insert_sql, buffer)
+        execute_values(pg_cur, insert_sql, buffer, page_size=1000)
         pg_conn.commit()
         inserted_total += len(buffer)
+        logging.info(f"[ETL] collecteur_acte_icr: {inserted_total:,} lignes insérées au total.")
 
     logging.info(
         "[ETL] collecteur_acte_icr terminé: "
