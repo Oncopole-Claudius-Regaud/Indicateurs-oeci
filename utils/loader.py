@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import csv
+from datetime import datetime
 from typing import Iterable, Dict, Any, List, Tuple
 import pandas as pd
 from psycopg2.extras import execute_values
@@ -79,6 +80,43 @@ def _stream_rows(basename: str) -> Iterable[Dict[str, Any]]:
     else:
         logging.warning(f"[ETL] Fichier introuvable pour {basename} (ni .jsonl ni .json).")
         return iter(())
+
+
+def _source_file_exists(basename: str) -> bool:
+    return (
+        os.path.exists(os.path.join(OUTPUT_DIR, f"{basename}.jsonl"))
+        or os.path.exists(os.path.join(OUTPUT_DIR, f"{basename}.json"))
+    )
+
+
+def _row_get(row: Dict[str, Any], key: str):
+    if key in row:
+        return row.get(key)
+    upper_key = key.upper()
+    if upper_key in row:
+        return row.get(upper_key)
+    lower_key = key.lower()
+    if lower_key in row:
+        return row.get(lower_key)
+    return None
+
+
+def _to_timestamp_or_none(v):
+    v = none_if_empty(v)
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v
+
+    if isinstance(v, (int, float)):
+        unit = "ms" if abs(v) > 10**11 else "s"
+        ts = pd.to_datetime(v, unit=unit, errors="coerce")
+    else:
+        ts = pd.to_datetime(str(v).strip(), errors="coerce")
+
+    if pd.isna(ts):
+        return None
+    return ts.to_pydatetime()
 
 
 def _flush_values(cur, sql_stmt: str, buffer: List[Tuple], label: str = "", commit_conn=None):
@@ -159,6 +197,71 @@ def load_treatments_from_file(pg_conn):
     pg_conn.commit()
     pg_cur.close()
     logging.info(" Chargement complet dans oeci.chimiotherapie.")
+
+
+def load_collecteur_acte_icr_from_file(pg_conn, pg_cur):
+    logging.info("Début du chargement de oeci.collecteur_acte_icr depuis /tmp/etl_iris/collecteur_acte_icr.jsonl...")
+
+    basename = "collecteur_acte_icr"
+    if not _source_file_exists(basename):
+        raise FileNotFoundError(
+            f"Fichier source introuvable pour {basename} dans {OUTPUT_DIR} (attendu: .jsonl ou .json)."
+        )
+
+    cols = [
+        "cai_numdoss",
+        "cai_date_real",
+        "cai_code_ccam",
+        "cai_theme",
+        "cai_code_ccam_fact",
+        "cai_date_suppression",
+    ]
+    cols_csv = ", ".join(cols)
+    cutoff_date = datetime(2023, 1, 1)
+
+    pg_cur.execute("TRUNCATE TABLE oeci.collecteur_acte_icr CASCADE;")
+    pg_conn.commit()
+
+    insert_sql = f"INSERT INTO oeci.collecteur_acte_icr ({cols_csv}) VALUES %s"
+    buffer: List[Tuple] = []
+    read_total = 0
+    inserted_total = 0
+    filtered_total = 0
+
+    for row in _stream_rows(basename):
+        read_total += 1
+        cai_date_real = _to_timestamp_or_none(_row_get(row, "cai_date_real"))
+
+        if cai_date_real is None or cai_date_real <= cutoff_date:
+            filtered_total += 1
+            continue
+
+        buffer.append((
+            none_if_empty(_row_get(row, "cai_numdoss")),
+            cai_date_real,
+            none_if_empty(_row_get(row, "cai_code_ccam")),
+            none_if_empty(_row_get(row, "cai_theme")),
+            none_if_empty(_row_get(row, "cai_code_ccam_fact")),
+            _to_timestamp_or_none(_row_get(row, "cai_date_suppression")),
+        ))
+
+        if len(buffer) >= BATCH_SIZE:
+            execute_values(pg_cur, insert_sql, buffer)
+            pg_conn.commit()
+            inserted_total += len(buffer)
+            logging.info(f"[ETL] collecteur_acte_icr: {inserted_total:,} lignes insérées...")
+            buffer.clear()
+
+    if buffer:
+        execute_values(pg_cur, insert_sql, buffer)
+        pg_conn.commit()
+        inserted_total += len(buffer)
+
+    logging.info(
+        "[ETL] collecteur_acte_icr terminé: "
+        f"{read_total:,} lignes lues, {inserted_total:,} insérées, {filtered_total:,} filtrées "
+        "(condition: cai_date_real > 2023-01-01)."
+    )
 
 
 # --------------------------------------------------------------------
@@ -489,6 +592,9 @@ def load_to_postgresql(**kwargs):
 
     extract_treatments_to_file(pg_conn)
     load_treatments_from_file(pg_conn)
+
+    # ---------------- COLLECTEUR_ACTE_ICR ----------------
+    load_collecteur_acte_icr_from_file(pg_conn, pg_cur)
 
 
     # ---------------- CLEANUP ----------------
