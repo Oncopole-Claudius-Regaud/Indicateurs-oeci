@@ -232,22 +232,45 @@ def load_collecteur_acte_icr_from_file(pg_conn, pg_cur):
     read_total = 0
     inserted_total = 0
     filtered_total = 0
+    invalid_date_total = 0
+    old_date_total = 0
+    invalid_date_samples = []
+    old_date_samples = []
+    kept_date_samples = []
 
     for row in _stream_rows(basename):
         read_total += 1
         if read_total % 100_000 == 0:
             logging.info(
-                "[ETL] collecteur_acte_icr: %s lignes lues, %s inserees, %s filtrees...",
+                "[ETL] collecteur_acte_icr: %s lignes lues, %s inserees, %s filtrees "
+                "(%s dates invalides, %s dates <= 2023-01-01, %s en buffer)...",
                 f"{read_total:,}",
                 f"{inserted_total:,}",
                 f"{filtered_total:,}",
+                f"{invalid_date_total:,}",
+                f"{old_date_total:,}",
+                f"{len(buffer):,}",
             )
 
-        cai_date_real = _to_timestamp_or_none(_row_get(row, "cai_date_real"))
+        raw_cai_date_real = _row_get(row, "cai_date_real")
+        cai_date_real = _to_timestamp_or_none(raw_cai_date_real)
 
-        if cai_date_real is None or cai_date_real <= cutoff_date:
+        if cai_date_real is None:
+            invalid_date_total += 1
+            if len(invalid_date_samples) < 5:
+                invalid_date_samples.append(raw_cai_date_real)
             filtered_total += 1
             continue
+
+        if cai_date_real <= cutoff_date:
+            old_date_total += 1
+            if len(old_date_samples) < 5:
+                old_date_samples.append(raw_cai_date_real)
+            filtered_total += 1
+            continue
+
+        if len(kept_date_samples) < 5:
+            kept_date_samples.append(raw_cai_date_real)
 
         buffer.append((
             none_if_empty(_row_get(row, "cai_numdoss")),
@@ -274,6 +297,9 @@ def load_collecteur_acte_icr_from_file(pg_conn, pg_cur):
     logging.info(
         "[ETL] collecteur_acte_icr terminé: "
         f"{read_total:,} lignes lues, {inserted_total:,} insérées, {filtered_total:,} filtrées "
+        f"({invalid_date_total:,} dates invalides, {old_date_total:,} dates <= 2023-01-01). "
+        f"Exemples invalides={invalid_date_samples}, exemples anciennes={old_date_samples}, "
+        f"exemples gardees={kept_date_samples}. "
         "(condition: cai_date_real > 2023-01-01)."
     )
 
@@ -377,6 +403,25 @@ def load_to_postgresql(**kwargs):
         ) VALUES %s
         ON CONFLICT DO NOTHING
     """, admission_buffer, label="admissions (final)", commit_conn=pg_conn)
+
+    # ---------------- CONTACT ----------------
+    logging.info("Début du chargement de oeci.contact depuis osiris.contact...")
+
+    pg_cur.execute("TRUNCATE TABLE oeci.contact CASCADE;")
+    pg_conn.commit()
+
+    pg_cur.execute("""
+        INSERT INTO oeci.contact (ipp_ocr, contact_date)
+        SELECT DISTINCT
+            ipp_ocr,
+            contact_date::date
+        FROM osiris.contact
+        WHERE ipp_ocr IS NOT NULL
+          AND contact_date IS NOT NULL;
+    """)
+    pg_conn.commit()
+
+    logging.info(f"Chargement terminé : {pg_cur.rowcount} lignes insérées dans oeci.contact.")
 
     # ---------------- DIAGNOSTICS ----------------
     pg_cur.execute("TRUNCATE TABLE oeci.diagnostics CASCADE;")
