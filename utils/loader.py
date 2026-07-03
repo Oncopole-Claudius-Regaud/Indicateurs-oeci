@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import csv
+from datetime import datetime
 from typing import Iterable, Dict, Any, List, Tuple
 import pandas as pd
 from psycopg2.extras import execute_values
@@ -81,6 +82,43 @@ def _stream_rows(basename: str) -> Iterable[Dict[str, Any]]:
         return iter(())
 
 
+def _source_file_exists(basename: str) -> bool:
+    return (
+        os.path.exists(os.path.join(OUTPUT_DIR, f"{basename}.jsonl"))
+        or os.path.exists(os.path.join(OUTPUT_DIR, f"{basename}.json"))
+    )
+
+
+def _row_get(row: Dict[str, Any], key: str):
+    if key in row:
+        return row.get(key)
+    upper_key = key.upper()
+    if upper_key in row:
+        return row.get(upper_key)
+    lower_key = key.lower()
+    if lower_key in row:
+        return row.get(lower_key)
+    return None
+
+
+def _to_timestamp_or_none(v):
+    v = none_if_empty(v)
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v
+
+    if isinstance(v, (int, float)):
+        unit = "ms" if abs(v) > 10**11 else "s"
+        ts = pd.to_datetime(v, unit=unit, errors="coerce")
+    else:
+        ts = pd.to_datetime(str(v).strip(), errors="coerce")
+
+    if pd.isna(ts):
+        return None
+    return ts.to_pydatetime()
+
+
 def _flush_values(cur, sql_stmt: str, buffer: List[Tuple], label: str = "", commit_conn=None):
     """Flush un buffer de tuples via execute_values, commit éventuel, clear, log."""
     if not buffer:
@@ -108,7 +146,6 @@ def extract_treatments_to_file(pg_conn):
             num_doss,
             jour,
             dat_admini,
-            cod_categ_proto,
             cod_typ_proto,
             num_pdt,
             nom_pdt,
@@ -117,8 +154,7 @@ def extract_treatments_to_file(pg_conn):
             lib_uf_real,
             dose_tot,
             nom_proto,
-            nom_moda,
-            ce_etat_chimio
+            nom_moda
         FROM osiris.chimiotherapie
     """)
 
@@ -152,15 +188,120 @@ def load_treatments_from_file(pg_conn):
         pg_cur.copy_expert("""
             COPY oeci.chimiotherapie (
                 num_doss,  jour, dat_admini,
-                cod_categ_proto, cod_typ_proto, num_pdt, nom_pdt,
+                cod_typ_proto, num_pdt, nom_pdt,
                 cod_voie, uf_real, lib_uf_real, dose_tot,
-                nom_proto, nom_moda, ce_etat_chimio
+                nom_proto, nom_moda
             )
             FROM STDIN WITH (FORMAT csv, DELIMITER '|', NULL '', HEADER false)
         """, f)
     pg_conn.commit()
     pg_cur.close()
     logging.info(" Chargement complet dans oeci.chimiotherapie.")
+
+
+def load_collecteur_acte_icr_from_file(pg_conn, pg_cur):
+    logging.info("Début du chargement de oeci.collecteur_acte_icr depuis /tmp/etl_iris/collecteur_acte_icr.jsonl...")
+
+    basename = "collecteur_acte_icr"
+    if not _source_file_exists(basename):
+        raise FileNotFoundError(
+            f"Fichier source introuvable pour {basename} dans {OUTPUT_DIR} (attendu: .jsonl ou .json)."
+        )
+
+    cols = [
+        "cai_numdoss",
+        "cai_date_real",
+        "cai_code_ccam",
+        "cai_theme",
+        "cai_code_ccam_fact",
+        "cai_date_suppression",
+    ]
+    cols_csv = ", ".join(cols)
+    cutoff_date = datetime(2023, 1, 1)
+
+    pg_cur.execute("SET lock_timeout = '10s';")
+    pg_cur.execute("SET statement_timeout = '0';")
+
+    logging.info("Truncate de oeci.collecteur_acte_icr...")
+    pg_cur.execute("TRUNCATE TABLE oeci.collecteur_acte_icr CASCADE;")
+    pg_conn.commit()
+    logging.info("Truncate de oeci.collecteur_acte_icr termine.")
+
+    insert_sql = f"INSERT INTO oeci.collecteur_acte_icr ({cols_csv}) VALUES %s"
+    buffer: List[Tuple] = []
+    read_total = 0
+    inserted_total = 0
+    filtered_total = 0
+    invalid_date_total = 0
+    old_date_total = 0
+    invalid_date_samples = []
+    old_date_samples = []
+    kept_date_samples = []
+
+    for row in _stream_rows(basename):
+        read_total += 1
+        if read_total % 100_000 == 0:
+            logging.info(
+                "[ETL] collecteur_acte_icr: %s lignes lues, %s inserees, %s filtrees "
+                "(%s dates invalides, %s dates <= 2023-01-01, %s en buffer)...",
+                f"{read_total:,}",
+                f"{inserted_total:,}",
+                f"{filtered_total:,}",
+                f"{invalid_date_total:,}",
+                f"{old_date_total:,}",
+                f"{len(buffer):,}",
+            )
+
+        raw_cai_date_real = _row_get(row, "cai_date_real")
+        cai_date_real = _to_timestamp_or_none(raw_cai_date_real)
+
+        if cai_date_real is None:
+            invalid_date_total += 1
+            if len(invalid_date_samples) < 5:
+                invalid_date_samples.append(raw_cai_date_real)
+            filtered_total += 1
+            continue
+
+        if cai_date_real <= cutoff_date:
+            old_date_total += 1
+            if len(old_date_samples) < 5:
+                old_date_samples.append(raw_cai_date_real)
+            filtered_total += 1
+            continue
+
+        if len(kept_date_samples) < 5:
+            kept_date_samples.append(raw_cai_date_real)
+
+        buffer.append((
+            none_if_empty(_row_get(row, "cai_numdoss")),
+            cai_date_real,
+            none_if_empty(_row_get(row, "cai_code_ccam")),
+            none_if_empty(_row_get(row, "cai_theme")),
+            none_if_empty(_row_get(row, "cai_code_ccam_fact")),
+            _to_timestamp_or_none(_row_get(row, "cai_date_suppression")),
+        ))
+
+        if len(buffer) >= BATCH_SIZE:
+            execute_values(pg_cur, insert_sql, buffer, page_size=1000)
+            pg_conn.commit()
+            inserted_total += len(buffer)
+            logging.info(f"[ETL] collecteur_acte_icr: {inserted_total:,} lignes insérées...")
+            buffer.clear()
+
+    if buffer:
+        execute_values(pg_cur, insert_sql, buffer, page_size=1000)
+        pg_conn.commit()
+        inserted_total += len(buffer)
+        logging.info(f"[ETL] collecteur_acte_icr: {inserted_total:,} lignes insérées au total.")
+
+    logging.info(
+        "[ETL] collecteur_acte_icr terminé: "
+        f"{read_total:,} lignes lues, {inserted_total:,} insérées, {filtered_total:,} filtrées "
+        f"({invalid_date_total:,} dates invalides, {old_date_total:,} dates <= 2023-01-01). "
+        f"Exemples invalides={invalid_date_samples}, exemples anciennes={old_date_samples}, "
+        f"exemples gardees={kept_date_samples}. "
+        "(condition: cai_date_real > 2023-01-01)."
+    )
 
 
 # --------------------------------------------------------------------
@@ -262,6 +403,25 @@ def load_to_postgresql(**kwargs):
         ) VALUES %s
         ON CONFLICT DO NOTHING
     """, admission_buffer, label="admissions (final)", commit_conn=pg_conn)
+
+    # ---------------- CONTACT ----------------
+    logging.info("Début du chargement de oeci.contact depuis osiris.contact...")
+
+    pg_cur.execute("TRUNCATE TABLE oeci.contact CASCADE;")
+    pg_conn.commit()
+
+    pg_cur.execute("""
+        INSERT INTO oeci.contact (ipp_ocr, contact_date)
+        SELECT DISTINCT
+            ipp_ocr,
+            contact_date::date
+        FROM osiris.contact
+        WHERE ipp_ocr IS NOT NULL
+          AND contact_date IS NOT NULL;
+    """)
+    pg_conn.commit()
+
+    logging.info(f"Chargement terminé : {pg_cur.rowcount} lignes insérées dans oeci.contact.")
 
     # ---------------- DIAGNOSTICS ----------------
     pg_cur.execute("TRUNCATE TABLE oeci.diagnostics CASCADE;")
@@ -491,6 +651,9 @@ def load_to_postgresql(**kwargs):
 
     extract_treatments_to_file(pg_conn)
     load_treatments_from_file(pg_conn)
+
+    # ---------------- COLLECTEUR_ACTE_ICR ----------------
+    load_collecteur_acte_icr_from_file(pg_conn, pg_cur)
 
 
     # ---------------- CLEANUP ----------------

@@ -18,7 +18,7 @@ ANNUAL_RE  = re.compile(r"^deces-(\d{4})\.txt$", re.I)
 
 DATASET_API_URL = "https://www.data.gouv.fr/api/1/datasets/fichier-des-personnes-decedees/"
 LOCAL_DOWNLOAD_PATH = "/tmp/insee_deces_latest.txt"
-TABLE_NAME = "oeci.insee_ref"
+TABLE_NAME = "ref_source_externe.insee_ref"
 
 CHUNK_SIZE = 10_000
 DATE8_RE = re.compile(r"^\d{8}$")
